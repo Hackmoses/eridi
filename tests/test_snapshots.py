@@ -70,6 +70,8 @@ def test_version_log_round_trip_and_dedup(snaps: SnapshotStore) -> None:
     assert snaps.log_version("root_A", "Protokolle_Ü/a.md", "a" * 64, T1)
     assert not snaps.log_version("root_A", "Protokolle_Ü/a.md", "a" * 64, T2)  # already known
     snaps.log_move("root_A", "Protokolle_Ü/a.md", "b.md", T2)
+    assert not snaps.log_path.exists()  # buffered until flushed (one fsync per batch)
+    snaps.flush()
     lines = SnapshotStore(snaps.folder).read_log()
     assert lines == [
         VersionLine("version", "root_A", "Protokolle_Ü/a.md", T1, "a" * 64, "scan"),
@@ -80,6 +82,7 @@ def test_version_log_round_trip_and_dedup(snaps: SnapshotStore) -> None:
 
 def test_torn_last_line_is_ignored(snaps: SnapshotStore) -> None:
     snaps.log_version("root_A", "a.md", "a" * 64, T1)
+    snaps.flush()
     with snaps.log_path.open("a", encoding="utf-8") as handle:
         handle.write('{"kind": "version", "root_id": "root_A", "pa')  # crash mid-write
     assert [ln.text_sha256 for ln in snaps.read_log()] == ["a" * 64]

@@ -2,16 +2,27 @@
 snapshot every new text version.
 
 Cheap by design: a file is re-read only when its size or modified time changed, and its
-text is extracted only when its bytes changed. Removed files are marked missing, never
-deleted, so their history stays. A file that disappears while another file with the same
-bytes appears is a move, and its history follows it.
+text is extracted only when its bytes changed. Files nothing can be extracted from
+(photos, videos, archives) are indexed by name without being read. Removed files are marked
+missing, never deleted, so their history stays. A file that disappears while another file
+with the same bytes appears is a move, and its history follows it.
+
+Fast on big folders: reading and extracting run in parallel worker processes, one per CPU
+core (`settings.scan_workers`), while this process writes the index. Results commit in
+small batches, so search works on what's done while a long scan carries on, and an
+interrupted scan keeps its progress.
 """
 
+import concurrent.futures as futures
 import logging
+import multiprocessing
+import os
+import pickle
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
+from typing import Literal
 
 from eridi.connectors.base import Connector, ConnectorError, RemoteFile
 from eridi.core.config import Settings
@@ -24,9 +35,22 @@ from eridi.core.snapshots import SnapshotStore
 log = logging.getLogger(__name__)
 
 COMMIT_EVERY = 50
+PARALLEL_MIN_FILES = 32
+"""Below this many files to read, worker processes cost more than they save."""
+MAX_WORKERS = 16
 
-Progress = Callable[[int, str], None]
-"""Called before each file with (files done so far, the file's path)."""
+
+@dataclass(frozen=True)
+class ScanProgress:
+    root: Root
+    phase: Literal["listing", "reading"]
+    done: int
+    total: int | None
+    """Files to read in this scan; None while listing."""
+    path: str
+
+
+Progress = Callable[[ScanProgress], None]
 
 
 @dataclass
@@ -45,10 +69,18 @@ class ScanReport:
     extracted: int = 0
     unavailable: str | None = None
     """Why the whole root could not be scanned (e.g. a drive that isn't connected)."""
+    workers: int = 1
 
 
 def _stem(path: str) -> str:
     return PurePosixPath(path).stem
+
+
+def worker_count(settings: Settings) -> int:
+    """`scan_workers = 0` means one per CPU core, keeping one free for everything else."""
+    if settings.scan_workers > 0:
+        return min(settings.scan_workers, MAX_WORKERS)
+    return max(1, min((os.cpu_count() or 2) - 1, MAX_WORKERS))
 
 
 def read_bytes(
@@ -78,6 +110,102 @@ def read_and_extract(
     return sha256_bytes(data), extract(remote.path.rsplit("/", 1)[-1], data)
 
 
+@dataclass(frozen=True)
+class Examined:
+    """What reading one file found. `result=None` means its bytes hadn't changed."""
+
+    content_sha256: str | None
+    result: ExtractResult | None
+    read: bool
+    """The bytes were read (False: skipped, or the read failed)."""
+    extracted: bool
+
+
+def examine(
+    connector: Connector,
+    remote: RemoteFile,
+    old_sha: str | None,
+    size_limit: int | None,
+    read_placeholders: bool,
+) -> Examined:
+    """Read, hash and (if the bytes changed) extract one file. Runs in worker processes."""
+    data, skipped = read_bytes(connector, remote, size_limit, read_placeholders=read_placeholders)
+    if data is None:
+        return Examined(remote.content_sha256, skipped, read=False, extracted=False)
+    sha = sha256_bytes(data)
+    if old_sha is not None and sha == old_sha:
+        return Examined(sha, None, read=True, extracted=False)
+    return Examined(sha, extract(remote.path.rsplit("/", 1)[-1], data), read=True, extracted=True)
+
+
+def _picklable(connector: Connector) -> bool:
+    try:
+        pickle.dumps(connector)
+    except Exception:
+        return False
+    return True
+
+
+Job = tuple[RemoteFile, FileInfo | None]
+
+
+def _examine_all(
+    connector: Connector, jobs: list[Job], settings: Settings, workers: int
+) -> Iterator[tuple[RemoteFile, FileInfo | None, Examined]]:
+    """Examine every job, in parallel when it's worth it. Yields as files finish."""
+    size_limit = settings.size_limit_bytes
+    placeholders = settings.read_online_only_files
+
+    def here(job: Job) -> Examined:
+        remote, old = job
+        return examine(connector, remote, old.content_sha256 if old else None, size_limit,
+                       placeholders)  # fmt: skip
+
+    if workers <= 1 or len(jobs) < PARALLEL_MIN_FILES or not _picklable(connector):
+        for job in jobs:
+            yield job[0], job[1], here(job)
+        return
+
+    # "spawn" behaves the same on every OS and is safe while other threads are running.
+    pool = futures.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
+    queue = iter(jobs)
+    running: dict[futures.Future[Examined], Job] = {}
+    try:
+        while True:
+            while len(running) < workers * 4:
+                upcoming = next(queue, None)
+                if upcoming is None:
+                    break
+                remote, old = upcoming
+                future = pool.submit(examine, connector, remote,
+                                     old.content_sha256 if old else None, size_limit,
+                                     placeholders)  # fmt: skip
+                running[future] = upcoming
+            if not running:
+                return
+            finished, _ = futures.wait(running, return_when=futures.FIRST_COMPLETED)
+            for future in finished:
+                job = running.pop(future)
+                try:
+                    examined = future.result()
+                except futures.process.BrokenProcessPool:
+                    running[future] = job
+                    raise
+                except Exception:
+                    log.warning("A worker failed on %s; reading it here instead.", job[0].path)
+                    examined = here(job)
+                yield job[0], job[1], examined
+    except futures.process.BrokenProcessPool:
+        # A worker crashed (e.g. a parser bug on one odd file). Finish without workers.
+        log.warning("Scan workers stopped unexpectedly; finishing in one process.")
+        pool.shutdown(wait=False, cancel_futures=True)
+        for job in [*running.values(), *queue]:
+            yield job[0], job[1], here(job)
+        return
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+
+
 def scan_root(
     conn: sqlite3.Connection,
     root: Root,
@@ -94,24 +222,55 @@ def scan_root(
     existing = {f.path: f for f in list_files(conn, root.id)}
     seen: set[str] = set()
     new_files: list[FileInfo] = []
+    jobs: list[Job] = []
     pending = 0
+
+    def commit() -> None:
+        snapshots.flush()  # the version log first, so the index never runs ahead of it
+        conn.commit()
+
     try:
-        for done, remote in enumerate(connector.list_files()):
-            if progress is not None:
-                progress(done, remote.path)
+        for listed, remote in enumerate(connector.list_files()):
+            if progress is not None and listed % 200 == 0:
+                progress(ScanProgress(root, "listing", listed, None, remote.path))
             seen.add(remote.path)
-            stored = _scan_file(conn, root, connector, remote, existing.get(remote.path), now,
-                                snapshots, settings, report)  # fmt: skip
+            old = existing.get(remote.path)
+            if _unchanged(old, remote):
+                report.unchanged += 1
+            elif extractor_for(remote.path) is None:
+                # Nothing to search inside it: index its name without reading it.
+                name_only = ExtractResult("", _stem(remote.path), "name_only")
+                stored = _apply(conn, root, remote, old, Examined(None, name_only, False, False),
+                                now, snapshots, report)  # fmt: skip
+                if stored is not None:
+                    new_files.append(stored)
+                pending += 1
+            else:
+                jobs.append((remote, old))
+            if pending >= COMMIT_EVERY:
+                commit()
+                pending = 0
+    except ConnectorError as exc:
+        commit()
+        report.unavailable = str(exc)
+        return report  # don't mark anything missing when the root itself is unreachable
+
+    report.workers = worker_count(settings)
+    try:
+        for done, (remote, old, examined) in enumerate(
+            _examine_all(connector, jobs, settings, report.workers)
+        ):
+            if progress is not None:
+                progress(ScanProgress(root, "reading", done, len(jobs), remote.path))
+            stored = _apply(conn, root, remote, old, examined, now, snapshots, report)
             if stored is not None:
                 new_files.append(stored)
             pending += 1
             if pending >= COMMIT_EVERY:
-                conn.commit()
+                commit()
                 pending = 0
-    except ConnectorError as exc:
-        conn.commit()
-        report.unavailable = str(exc)
-        return report  # don't mark anything missing when the root itself is unreachable
+    finally:
+        commit()  # keep everything finished so far, even when interrupted
 
     gone = {p: f for p, f in existing.items() if p not in seen and f.status == "present"}
     by_content: dict[str, FileInfo] = {}
@@ -130,81 +289,63 @@ def scan_root(
     for path in sorted(gone):
         set_status(conn, root.id, path, "missing")
         report.missing.append(path)
-    conn.commit()
+    commit()
+    report.new.sort()
+    report.changed.sort()
+    report.errors.sort()
+    report.skipped.sort()
     return report
 
 
-def _scan_file(
-    conn: sqlite3.Connection,
-    root: Root,
-    connector: Connector,
-    remote: RemoteFile,
-    old: FileInfo | None,
-    now: str,
-    snapshots: SnapshotStore,
-    settings: Settings,
-    report: ScanReport,
-) -> FileInfo | None:
-    """Scan one file. Returns the stored row if the file is new (a possible move target)."""
-    present = old is not None and old.status == "present"
-    if (
+def _unchanged(old: FileInfo | None, remote: RemoteFile) -> bool:
+    return (
         old is not None
-        and present
+        and old.status == "present"
         and old.size == remote.size
         and old.modified == remote.modified
         and old.placeholder == remote.is_placeholder
-    ):
-        report.unchanged += 1
-        return None
+    )
 
-    if extractor_for(remote.path) is None:
-        # Nothing to search in it (images, videos, archives…): index its name without
-        # reading it, so scanning a folder full of media stays fast.
-        data: bytes | None = None
-        skipped: ExtractResult | None = ExtractResult("", _stem(remote.path), "name_only")
-    else:
-        data, skipped = read_bytes(
-            connector, remote, settings.size_limit_bytes,
-            read_placeholders=settings.read_online_only_files,
-        )  # fmt: skip
-    content_sha = sha256_bytes(data) if data is not None else remote.content_sha256
+
+def _apply(
+    conn: sqlite3.Connection,
+    root: Root,
+    remote: RemoteFile,
+    old: FileInfo | None,
+    examined: Examined,
+    now: str,
+    snapshots: SnapshotStore,
+    report: ScanReport,
+) -> FileInfo | None:
+    """Store what was found for one file. Returns the stored row if the file is new."""
+    present = old is not None and old.status == "present"
     base = FileInfo(
         root_id=root.id,
         path=remote.path,
         size=remote.size,
         modified=remote.modified,
         ext=extension(remote.path),
-        content_sha256=content_sha,
+        content_sha256=examined.content_sha256,
         placeholder=remote.is_placeholder,
         last_seen=now,
     )
-
-    if (
-        old is not None
-        and present
-        and content_sha is not None
-        and content_sha == old.content_sha256
-    ):
+    if examined.result is None:
         # Touched or re-saved with identical bytes: update the metadata, keep the text.
+        assert old is not None  # noqa: S101 - only files we had can have unchanged bytes
         upsert_file(conn, _keep_text(base, old), None)
         report.unchanged += 1
         return None
 
-    if skipped is not None:
-        result = skipped
-        if result.status == "error":
-            report.errors.append((remote.path, result.reason or "unknown error"))
-            if old is not None and present:
-                return None  # keep what we had; a read error is not a change
-        elif result.status != "name_only":
-            report.skipped.append((remote.path, result.reason or result.status))
-    else:
-        assert data is not None  # noqa: S101
-        result = extract(remote.path.rsplit("/", 1)[-1], data)
+    result = examined.result
+    if examined.extracted:
         report.extracted += 1
-        if result.status == "error":
-            report.errors.append((remote.path, result.reason or "unknown error"))
-            log.info("Could not extract %s: %s", remote.path, result.reason)
+    if result.status == "error":
+        report.errors.append((remote.path, result.reason or "unknown error"))
+        log.info("Could not read %s: %s", remote.path, result.reason)
+        if not examined.read and present:
+            return None  # keep what we had; a read error is not a change
+    elif not examined.read and result.status != "name_only":
+        report.skipped.append((remote.path, result.reason or result.status))
 
     text_sha = sha256_text(result.text) if result.text else None
     info = replace(base, text_sha256=text_sha, title=result.title, extract_status=result.status)

@@ -7,6 +7,7 @@ import pytest
 from docx import Document
 
 from conftest import SampleLab
+from eridi.core.scan import ScanProgress
 from eridi.core.service import (
     AmbiguousFileError,
     Eridi,
@@ -258,6 +259,34 @@ def test_sees_storage_added_by_another_eridi(app: Eridi, sample_lab: SampleLab) 
 
 def test_scan_reports_progress(lab: Eridi, sample_lab: SampleLab) -> None:
     edit_protocol(sample_lab, "Primary antibody incubation: 9 h at RT.")
-    seen: list[tuple[str, int, str]] = []
-    lab.scan(progress=lambda root, n, path: seen.append((root.label, n, path)))
-    assert len(seen) == 9 and seen[0][0] == "Lab Drive"
+    seen: list[ScanProgress] = []
+    lab.scan(progress=seen.append)
+    reading = [p for p in seen if p.phase == "reading"]
+    assert len(reading) == 1 and reading[0].root.label == "Lab Drive"  # only the edited file
+
+
+def test_search_works_while_a_scan_runs(
+    lab: Eridi, sample_lab: SampleLab, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A long scan in the app's background thread must not freeze search."""
+    import threading
+
+    import eridi.core.service as service_module
+
+    started, release = threading.Event(), threading.Event()
+    real_scan_root = service_module.scan_root
+
+    def slow_scan_root(*args: object, **kwargs: object) -> object:
+        started.set()
+        release.wait(10)
+        return real_scan_root(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(service_module, "scan_root", slow_scan_root)
+    scanning = threading.Thread(target=lab.scan)
+    scanning.start()
+    assert started.wait(5)
+    hits = lab.search("blocking buffer")  # would hang if the scan held the lock
+    assert hits
+    release.set()
+    scanning.join(10)
+    assert not scanning.is_alive()

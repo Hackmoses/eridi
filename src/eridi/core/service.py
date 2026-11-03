@@ -6,13 +6,12 @@ scans in the background while it answers requests).
 """
 
 import contextlib
-import functools
 import json
 import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -23,11 +22,12 @@ from eridi.core import changes as changes_module
 from eridi.core.changes import FileDiff, PendingChange
 from eridi.core.config import Config, User, config_path, load_config, save_config
 from eridi.core.ids import is_ulid, new_id
-from eridi.core.index.db import check_fts5, get_meta, open_index, set_meta
+from eridi.core.index.db import check_fts5, get_meta, index_path, open_index, set_meta
 from eridi.core.index.files import (
     file_moves,
     get_file,
     list_files,
+    restore_versions,
     text_versions,
     upsert_root,
 )
@@ -47,7 +47,7 @@ from eridi.core.paths import PathOutsideRootError, app_home, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
 from eridi.core.record.store import RecordFolderError, RecordStore
 from eridi.core.record.views import HistoryItem, history
-from eridi.core.scan import ScanReport, scan_root
+from eridi.core.scan import Progress, ScanReport, scan_root
 from eridi.core.snapshots import SnapshotStore
 
 log = logging.getLogger(__name__)
@@ -153,7 +153,9 @@ class Eridi:
         self._config = load_config(self.config_file)
         self._config_stamp = self._stamp()
         self._lock = threading.RLock()
-        self.conn: sqlite3.Connection = open_index(index_file, threads=True)
+        self._index_path = index_file or index_path()
+        self.conn: sqlite3.Connection = open_index(self._index_path, threads=True)
+        self._scan_lock = threading.Lock()
         self.snapshots = SnapshotStore(cap_bytes=self._config.settings.snapshot_cap_mb * 2**20)
         self._store: RecordStore | None = None
         self._last_refresh = 0.0
@@ -379,42 +381,66 @@ class Eridi:
                 referenced.add(change.from_text_sha256)
         return referenced
 
-    def scan(
-        self, root_id: str | None = None, progress: Callable[[Root, int, str], None] | None = None
-    ) -> ScanSummary:
+    def scan(self, root_id: str | None = None, progress: Progress | None = None) -> ScanSummary:
         """Scan storage (all roots with search on, or one), then refresh the record.
 
-        `progress(root, files_done, path)` is called before each file."""
-        with self._lock:
-            self._reload_if_changed()
-            if get_meta(self.conn, BUILT_KEY) is None:
-                report = self.rebuild_index(progress)
-                return ScanSummary(list(report.roots.values()), report.record, rebuilt=True)
-            roots = [self.get_root(root_id)] if root_id else self.list_roots()
-            summary = ScanSummary()
-            for root in roots:
-                if not root.search:
-                    continue
-                try:
-                    connector = self.connector(root)
-                except ConnectorError as exc:
-                    summary.reports.append(ScanReport(root.id, unavailable=str(exc)))
-                    continue
-                on_file = None if progress is None else functools.partial(progress, root)
-                summary.reports.append(
-                    scan_root(
-                        self.conn, root, connector, self.snapshots, self._config.settings, on_file
-                    )
-                )
-            summary.record = self._refresh_records(force=True)
-            summary.evicted = len(self.snapshots.evict(self._referenced_texts()))
-            return summary
+        The scan writes through its own database connection without holding the service
+        lock, so searches and notes keep working (on what's indexed so far) while a long
+        scan runs. Only one scan runs at a time."""
+        with self._scan_lock:
+            with self._lock:
+                self._reload_if_changed()
+                first = get_meta(self.conn, BUILT_KEY) is None
+                everything = first or root_id is None
+                roots = self.list_roots() if everything else [self.get_root(str(root_id))]
+                settings = self._config.settings
+                summary = ScanSummary(rebuilt=first)
+                connectors: list[tuple[Root, Connector]] = []
+                for root in roots:
+                    if not root.search:
+                        with self.conn:
+                            upsert_root(self.conn, root)
+                        continue
+                    try:
+                        connectors.append((root, self.connector(root)))
+                    except ConnectorError as exc:
+                        summary.reports.append(ScanReport(root.id, unavailable=str(exc)))
 
-    def rebuild_index(
-        self, progress: Callable[[Root, int, str], None] | None = None
-    ) -> RebuildReport:
+            conn = self._scan_connection()
+            try:
+                for root, connector in connectors:
+                    summary.reports.append(
+                        scan_root(conn, root, connector, self.snapshots, settings, progress)
+                    )
+            finally:
+                if conn is not self.conn:
+                    conn.close()
+
+            with self._lock:
+                if first:
+                    # A new (or upgraded) index: restore version history and the whole record.
+                    with self.conn:
+                        restore_versions(self.conn, self.snapshots.read_log())
+                    try:
+                        summary.record = sync_records(self.conn, self.store, full=True)
+                    except EridiError as exc:
+                        log.warning("Record folder not available: %s", exc)
+                    with self.conn:
+                        set_meta(self.conn, BUILT_KEY, str(time.time()))
+                    self._last_refresh = time.monotonic()
+                else:
+                    summary.record = self._refresh_records(force=True)
+                summary.evicted = len(self.snapshots.evict(self._referenced_texts()))
+                return summary
+
+    def _scan_connection(self) -> sqlite3.Connection:
+        if str(self._index_path) == ":memory:":
+            return self.conn
+        return open_index(self._index_path)
+
+    def rebuild_index(self, progress: Progress | None = None) -> RebuildReport:
         """Throw the index away and rebuild it from storage, snapshots and the record."""
-        with self._lock:
+        with self._scan_lock, self._lock:
             self._reload_if_changed()
             roots = self.list_roots()
             connectors: dict[str, Connector] = {}

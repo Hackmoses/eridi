@@ -5,6 +5,7 @@ import json
 import shlex
 import shutil
 import sys
+import time
 import urllib.error
 import urllib.request
 import webbrowser
@@ -22,8 +23,9 @@ from eridi.core.changes import FileDiff
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit
-from eridi.core.models import OUTCOMES, Entry, FileInfo, Root, parse_timestamp
+from eridi.core.models import OUTCOMES, Entry, FileInfo, parse_timestamp
 from eridi.core.record.store import RecordFolderError
+from eridi.core.scan import ScanProgress
 from eridi.core.service import (
     AmbiguousFileError,
     Eridi,
@@ -79,16 +81,35 @@ def session() -> Iterator[Eridi]:
 
 
 @contextlib.contextmanager
-def scan_progress() -> Iterator[Callable[[Root, int, str], None]]:
-    """A one-line live status for long scans: storage, files done, current file."""
+def scan_progress() -> Iterator[Callable[[ScanProgress], None]]:
+    """A one-line live status for long scans: storage, files done of total, current file."""
     out = console()
+    started = time.monotonic()
     with out.status("Scanning…") as status:
 
-        def update(root: Root, done: int, path: str) -> None:
-            name = path if len(path) <= 60 else "…" + path[-59:]
-            status.update(f"Scanning {escape(root.label)}: {done:,} files · {escape(name)}")
+        def update(p: ScanProgress) -> None:
+            name = p.path if len(p.path) <= 50 else "…" + p.path[-49:]
+            label = escape(p.root.label)
+            if p.phase == "listing":
+                status.update(f"Listing {label}: {p.done:,} files · {escape(name)}")
+                return
+            total = p.total or 0
+            eta = ""
+            elapsed = time.monotonic() - started
+            if p.done >= 20 and total > p.done:
+                left = elapsed / p.done * (total - p.done)
+                eta = f" · about {format_duration(left)} left"
+            status.update(f"Reading {label}: {p.done:,} of {total:,}{eta} · {escape(name)}")
 
         yield update
+
+
+def format_duration(seconds: float) -> str:
+    if seconds < 90:
+        return f"{max(1, round(seconds))} s"
+    if seconds < 90 * 60:
+        return f"{round(seconds / 60)} min"
+    return f"{seconds / 3600:.1f} h"
 
 
 def when(timestamp: str) -> str:

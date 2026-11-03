@@ -79,6 +79,7 @@ class SnapshotStore:
         self.folder = folder or app_home() / "snapshots"
         self.cap_bytes = cap_bytes
         self._logged: set[tuple[str, str, str]] | None = None
+        self._pending: list[str] = []
 
     # --- text ---
 
@@ -94,7 +95,9 @@ class SnapshotStore:
         if not target.exists():
             data = gzip.compress(text.encode("utf-8"), mtime=0)
             with contextlib.suppress(FileExistsError):
-                atomic_write_bytes(target, data, overwrite=False)
+                # Not fsynced: a snapshot lost in a power cut only means one diff is unavailable,
+                # and skipping fsync keeps big first scans fast.
+                atomic_write_bytes(target, data, overwrite=False, durable=False)
         return sha
 
     def get(self, sha: str) -> str | None:
@@ -151,6 +154,7 @@ class SnapshotStore:
 
     def read_log(self) -> list[VersionLine]:
         """Every valid line, in order. A torn or garbled line (e.g. after a crash) is skipped."""
+        self.flush()
         try:
             raw = self.log_path.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
@@ -166,8 +170,14 @@ class SnapshotStore:
         return lines
 
     def _append(self, line: VersionLine) -> None:
+        self._pending.append(line.to_json() + "\n")
+
+    def flush(self) -> None:
+        """Write buffered log lines with a single fsync. Scans call this before committing."""
+        if not self._pending:
+            return
         self.folder.mkdir(parents=True, exist_ok=True)
-        payload = line.to_json() + "\n"
+        payload = "".join(self._pending)
         with self.log_path.open("a", encoding="utf-8", newline="\n") as handle:
             # A crash can leave a torn last line; start ours on a fresh line regardless.
             if handle.tell() > 0 and not self._ends_with_newline():
@@ -175,6 +185,7 @@ class SnapshotStore:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
+        self._pending.clear()
 
     def _ends_with_newline(self) -> bool:
         with self.log_path.open("rb") as handle:

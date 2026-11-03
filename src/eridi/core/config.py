@@ -39,6 +39,8 @@ class Settings:
     """Read files that a sync client keeps only in the cloud (this downloads them)."""
     scan_interval_minutes: int = 10
     """How often the app scans in the background while it is open; 0 turns it off."""
+    scan_workers: int = 0
+    """Processes reading files in parallel during a scan; 0 means one per CPU core."""
 
     @property
     def size_limit_bytes(self) -> int:
@@ -130,6 +132,8 @@ def _parse(path: Path, data: dict[str, Any]) -> Config:
     settings = Settings(**values)
     if settings.size_limit_mb <= 0:
         _bad(path, "settings.size_limit_mb", "must be greater than 0")
+    if settings.scan_workers < 0:
+        _bad(path, "settings.scan_workers", "must not be negative (0 means automatic)")
     if settings.scan_interval_minutes < 0:
         _bad(path, "settings.scan_interval_minutes", "must not be negative")
     if settings.snapshot_cap_mb < 0:

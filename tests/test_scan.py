@@ -16,7 +16,7 @@ from eridi.core.config import Settings
 from eridi.core.index.db import open_index
 from eridi.core.index.files import file_moves, get_file, list_files, text_versions
 from eridi.core.models import Root
-from eridi.core.scan import ScanReport, scan_root, scan_roots
+from eridi.core.scan import ScanProgress, ScanReport, scan_root, scan_roots
 from eridi.core.snapshots import SnapshotStore
 
 PROTOCOL = "Protocols/Western_blot_blocking_v7.docx"
@@ -246,7 +246,57 @@ def test_files_nothing_can_be_read_from_are_not_opened(
 
 
 def test_progress_is_reported_per_file(lab: Lab) -> None:
-    calls: list[tuple[int, str]] = []
-    scan_root(lab.conn, lab.root, lab.connector, lab.snaps, None, lambda n, p: calls.append((n, p)))
-    assert [n for n, _ in calls] == list(range(9))
-    assert PROTOCOL in [p for _, p in calls]
+    calls: list[ScanProgress] = []
+    scan_root(lab.conn, lab.root, lab.connector, lab.snaps, None, calls.append)
+    reading = [c for c in calls if c.phase == "reading"]
+    assert [c.done for c in reading] == list(range(9))
+    assert {c.total for c in reading} == {9}
+    assert PROTOCOL in [c.path for c in reading]
+    assert calls[0].phase == "listing" and calls[0].root == lab.root
+
+
+def _many_files(root: Path, n: int) -> None:
+    folder = root / "Many"
+    folder.mkdir()
+    for i in range(n):
+        (folder / f"note_{i:03d}.md").write_text(
+            f"# Note {i}\nbuffer batch {i}\n", encoding="utf-8"
+        )
+
+
+def test_parallel_scan_matches_a_serial_scan(
+    sample_lab: SampleLab, tmp_path: Path, snaps: SnapshotStore
+) -> None:
+    _many_files(sample_lab.root, 60)
+    root = Root("root_LAB", "Lab Drive", str(sample_lab.root))
+    results = {}
+    for workers in (1, 2):
+        conn = open_index(Path(":memory:"))
+        report = scan_root(conn, root, LocalConnector(sample_lab.root, root.id), snaps,
+                           Settings(scan_workers=workers))  # fmt: skip
+        assert report.workers == workers
+        rows = conn.execute(
+            "SELECT path, content_sha256, text_sha256, title, extract_status FROM files "
+            "ORDER BY path"
+        ).fetchall()
+        results[workers] = ([tuple(r) for r in rows], report.new, report.errors)
+        conn.close()
+    assert results[1] == results[2]
+    assert len(results[2][1]) == 69
+
+
+def test_parallel_rescan_after_edits(lab: Lab) -> None:
+    _many_files(lab.sample.root, 40)
+    lab.scan(Settings(scan_workers=2))
+    for i in range(0, 40, 2):
+        (lab.sample.root / "Many" / f"note_{i:03d}.md").write_text("# changed\n", encoding="utf-8")
+    report = lab.scan(Settings(scan_workers=2))
+    assert len(report.changed) == 20 and report.new == []
+
+
+def test_worker_count_setting() -> None:
+    from eridi.core.scan import MAX_WORKERS, worker_count
+
+    assert worker_count(Settings(scan_workers=3)) == 3
+    assert worker_count(Settings(scan_workers=99)) == MAX_WORKERS
+    assert 1 <= worker_count(Settings()) <= MAX_WORKERS

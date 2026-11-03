@@ -24,13 +24,19 @@ def fsync_dir(directory: Path) -> None:
 
 
 def atomic_write_bytes(
-    target: Path, data: bytes, *, tmp_dir: Path | None = None, overwrite: bool = True
+    target: Path,
+    data: bytes,
+    *,
+    tmp_dir: Path | None = None,
+    overwrite: bool = True,
+    durable: bool = True,
 ) -> None:
     """Write `data` to `target` so readers see either nothing or the whole file.
 
     The bytes go to a temporary file (in `tmp_dir`, default the target's folder), are flushed
     with fsync, then renamed into place. With `overwrite=False` an existing target raises
-    `FileExistsError` and is left untouched.
+    `FileExistsError` and is left untouched. `durable=False` skips the fsyncs: still
+    atomic, but a power cut may lose the file. Fine for caches, never for the record.
     """
     tmp_dir = tmp_dir or target.parent
     tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -40,7 +46,8 @@ def atomic_write_bytes(
         with open(tmp, "wb") as handle:  # noqa: PTH123 - need the handle for fsync
             handle.write(data)
             handle.flush()
-            os.fsync(handle.fileno())
+            if durable:
+                os.fsync(handle.fileno())
         if overwrite:
             _replace(tmp, target)
         else:
@@ -48,7 +55,8 @@ def atomic_write_bytes(
     finally:
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
-    fsync_dir(target.parent)
+    if durable:
+        fsync_dir(target.parent)
 
 
 def _place_new(source: Path, target: Path) -> None:
