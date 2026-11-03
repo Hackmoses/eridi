@@ -5,9 +5,12 @@ import json
 import shlex
 import shutil
 import sys
+import urllib.error
+import urllib.request
+import webbrowser
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
@@ -531,6 +534,78 @@ def mcp_config() -> None:
         else:
             out.print("Read-only. To let assistants add notes, set \\[mcp] allow_writes = true in")
             out.print(str(eridi.config_file), markup=False)
+
+
+def local_http() -> urllib.request.OpenerDirector:
+    """An HTTP client for this computer only: never sends local requests through a proxy."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def running_server() -> int | None:
+    """The port of an Eridi server already running on this computer, if any."""
+    from eridi.api.app import server_file
+
+    try:
+        port = int(json.loads(server_file().read_text(encoding="utf-8"))["port"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    try:
+        with local_http().open(f"http://127.0.0.1:{port}/api/status", timeout=2):
+            pass
+    except urllib.error.HTTPError:
+        return port  # it answered (401 without a token): it's ours and running
+    except OSError:
+        return None
+    return port
+
+
+def session_link(port: int) -> str | None:
+    from eridi.api.security import stored_token
+
+    token = stored_token()
+    if token is None:
+        return None
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/session-link",
+        method="POST",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with local_http().open(request, timeout=5) as response:
+            url: str = json.loads(response.read())["url"]
+            return url
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+@app.command("open")
+def open_command(
+    browser: Annotated[bool, typer.Option(help="Open the browser.")] = True,
+) -> None:
+    """Open Eridi in your browser, starting it if it isn't running."""
+    port = running_server()
+    if port is not None:
+        url = session_link(port)
+        if url is None:
+            raise_error(
+                f"Eridi is already running (port {port}) but this terminal can't sign in to it. "
+                "Stop the other Eridi, then run `eridi open` again."
+            )
+        if browser:
+            webbrowser.open(url)
+        console().print(f"Eridi is running at http://127.0.0.1:{port}")
+        if not browser:
+            console().print(f"Open: {url}", markup=False)
+        return
+    from eridi.api.app import serve
+
+    with session() as eridi:
+        serve(eridi, open_browser=browser, announce=lambda m: console().print(m, markup=False))
+
+
+def raise_error(message: str) -> NoReturn:
+    err_console().print(f"[red]Error:[/red] {escape(message)}")
+    raise typer.Exit(1)
 
 
 @app.command()

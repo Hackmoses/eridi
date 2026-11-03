@@ -28,6 +28,17 @@ def entry(kind: str = "note", text: str = "Why it changed.", **fields: Any) -> E
 
 
 @pytest.fixture(autouse=True)
+def memory_keyring(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, str], str]:
+    """Tests never touch the developer's real OS keychain."""
+    import keyring
+
+    store: dict[tuple[str, str], str] = {}
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: store.get((s, u)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, p: store.__setitem__((s, u), p))
+    return store
+
+
+@pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     home = tmp_path / "eridi-home"
     monkeypatch.setenv("ERIDI_HOME", str(home))
