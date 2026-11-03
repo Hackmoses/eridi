@@ -19,7 +19,13 @@ from eridi.connectors import connector_for
 from eridi.connectors.base import Connector, ConnectorError
 from eridi.connectors.local import read_root_marker, write_root_marker
 from eridi.core import changes as changes_module
-from eridi.core.changes import FileDiff, PendingChange
+from eridi.core.changes import (
+    BASELINE_PREFIX,
+    Activity,
+    FileDiff,
+    PendingChange,
+    recent_activity,
+)
 from eridi.core.config import Config, User, config_path, load_config, save_config
 from eridi.core.ids import is_ulid, new_id
 from eridi.core.index.db import check_fts5, get_meta, index_path, open_index, set_meta
@@ -42,12 +48,13 @@ from eridi.core.models import (
     FileInfo,
     Root,
     Subject,
+    utc_now,
 )
 from eridi.core.paths import PathOutsideRootError, app_home, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
 from eridi.core.record.store import RecordFolderError, RecordStore
 from eridi.core.record.views import HistoryItem, history
-from eridi.core.scan import Progress, ScanReport, scan_root
+from eridi.core.scan import Progress, ScanReport, scan_files, scan_root
 from eridi.core.snapshots import SnapshotStore
 
 log = logging.getLogger(__name__)
@@ -159,6 +166,8 @@ class Eridi:
         self.snapshots = SnapshotStore(cap_bytes=self._config.settings.snapshot_cap_mb * 2**20)
         self._store: RecordStore | None = None
         self._last_refresh = 0.0
+        self.last_activity: str | None = None
+        """When a watcher last recorded a change (UIs refresh when this moves)."""
 
     def __enter__(self) -> "Eridi":
         return self
@@ -409,9 +418,12 @@ class Eridi:
             conn = self._scan_connection()
             try:
                 for root, connector in connectors:
-                    summary.reports.append(
-                        scan_root(conn, root, connector, self.snapshots, settings, progress)
-                    )
+                    report = scan_root(conn, root, connector, self.snapshots, settings, progress)
+                    summary.reports.append(report)
+                    if report.new or report.changed or report.moved or report.missing:
+                        self.last_activity = utc_now()
+                    if report.unavailable is None:
+                        _mark_baseline(conn, root.id)
             finally:
                 if conn is not self.conn:
                     conn.close()
@@ -432,6 +444,41 @@ class Eridi:
                     summary.record = self._refresh_records(force=True)
                 summary.evicted = len(self.snapshots.evict(self._referenced_texts()))
                 return summary
+
+    def scan_changed(self, root_id: str, paths: Iterable[str]) -> ScanReport | None:
+        """Scan just these files of one root (a watcher saw them change). Skipped while a
+        full scan runs, which will see them anyway."""
+        if not self._scan_lock.acquire(blocking=False):
+            return None
+        try:
+            with self._lock:
+                self._reload_if_changed()
+                root = self._config.root(root_id)
+                if root is None or not root.search or get_meta(self.conn, BUILT_KEY) is None:
+                    return None
+                connector = self.connector(root)
+                settings = self._config.settings
+            conn = self._scan_connection()
+            try:
+                report = scan_files(conn, root, connector, self.snapshots, paths, settings)
+            finally:
+                if conn is not self.conn:
+                    conn.close()
+            with self._lock:
+                if report.new or report.changed or report.moved or report.missing:
+                    self._refresh_records(force=True)
+                    self.last_activity = utc_now()
+            return report
+        finally:
+            self._scan_lock.release()
+
+    def activity(self, limit: int = 50, since: str | None = None) -> list[Activity]:
+        """What changed recently across all storage, newest first."""
+        with self._lock:
+            self._refresh_records()
+            return recent_activity(
+                self.conn, self.snapshots, self._config.dismissed_changes, limit, since
+            )
 
     def _scan_connection(self) -> sqlite3.Connection:
         if str(self._index_path) == ":memory:":
@@ -457,6 +504,9 @@ class Eridi:
             )  # fmt: skip
             with self.conn:
                 set_meta(self.conn, BUILT_KEY, str(time.time()))
+            for root_id, scanned in report.roots.items():
+                if scanned.unavailable is None:
+                    _mark_baseline(self.conn, root_id)
             self._last_refresh = time.monotonic()
             return report
 
@@ -831,3 +881,11 @@ class Eridi:
                 f"{used / 2**20:.1f} MB of {cap / 2**20:.0f} MB used.",
             )  # fmt: skip
         return report
+
+
+def _mark_baseline(conn: sqlite3.Connection, root_id: str) -> None:
+    """After a root's first complete scan, what it found was already there, not "added"."""
+    key = BASELINE_PREFIX + root_id
+    if get_meta(conn, key) is None:
+        with conn:
+            set_meta(conn, key, utc_now())

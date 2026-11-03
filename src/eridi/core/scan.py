@@ -23,7 +23,7 @@ import sqlite3
 import sys
 import time
 import warnings
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 from typing import Literal
@@ -32,7 +32,14 @@ from eridi.connectors.base import Connector, ConnectorError, RemoteFile
 from eridi.core.config import Settings
 from eridi.core.extract import ExtractResult, extension, extract, extractor_for
 from eridi.core.hashing import sha256_bytes, sha256_text
-from eridi.core.index.files import list_files, move_file, set_status, upsert_file, upsert_root
+from eridi.core.index.files import (
+    get_file,
+    list_files,
+    move_file,
+    set_status,
+    upsert_file,
+    upsert_root,
+)
 from eridi.core.models import FileInfo, Root, utc_now
 from eridi.core.snapshots import SnapshotStore
 
@@ -366,6 +373,22 @@ def scan_root(
         commit()  # keep everything finished so far, even when interrupted
 
     gone = {p: f for p, f in existing.items() if p not in seen and f.status == "present"}
+    _settle_gone(conn, root, snapshots, report, gone, new_files, now)
+    commit()
+    report.seconds = time.perf_counter() - started
+    return _sorted(report)
+
+
+def _settle_gone(
+    conn: sqlite3.Connection,
+    root: Root,
+    snapshots: SnapshotStore,
+    report: ScanReport,
+    gone: dict[str, FileInfo],
+    new_files: list[FileInfo],
+    now: str,
+) -> None:
+    """Files that disappeared: a move if a new file has the same bytes, else missing."""
     by_content: dict[str, FileInfo] = {}
     for f in gone.values():
         if f.content_sha256:
@@ -382,14 +405,76 @@ def scan_root(
     for path in sorted(gone):
         set_status(conn, root.id, path, "missing")
         report.missing.append(path)
-    commit()
+
+
+def _sorted(report: ScanReport) -> ScanReport:
     report.new.sort()
     report.changed.sort()
     report.errors.sort()
     report.skipped.sort()
     report.slow = sorted(report.slow, key=lambda s: -s[1])[:10]
-    report.seconds = time.perf_counter() - started
     return report
+
+
+def scan_files(
+    conn: sqlite3.Connection,
+    root: Root,
+    connector: Connector,
+    snapshots: SnapshotStore,
+    paths: Iterable[str],
+    settings: Settings | None = None,
+) -> ScanReport:
+    """Scan only these files (root-relative POSIX paths), e.g. the ones a watcher saw change.
+
+    Same rules as `scan_root`; a full scan still runs from time to time to catch anything a
+    watcher missed."""
+    describe = getattr(connector, "describe", None)
+    is_ignored = getattr(connector, "is_ignored", None)
+    if describe is None or is_ignored is None:
+        return scan_root(conn, root, connector, snapshots, settings)
+    settings = settings or Settings()
+    report = ScanReport(root.id)
+    started = time.perf_counter()
+    now = utc_now()
+    with conn:
+        upsert_root(conn, root)
+    gone: dict[str, FileInfo] = {}
+    new_files: list[FileInfo] = []
+    jobs: list[Job] = []
+    for path in sorted(set(paths)):
+        if is_ignored(path):
+            continue
+        old = get_file(conn, root.id, path)
+        remote: RemoteFile | None = describe(path)
+        if remote is None:
+            if old is not None and old.status == "present":
+                gone[path] = old
+            continue
+        if _unchanged(old, remote):
+            report.unchanged += 1
+        elif extractor_for(remote.path) is None:
+            name_only = ExtractResult("", _stem(remote.path), "name_only")
+            stored = _apply(conn, root, remote, old, Examined(None, name_only, False, False),
+                            now, snapshots, report)  # fmt: skip
+            if stored is not None:
+                new_files.append(stored)
+        else:
+            if old is None or old.extract_status == PENDING:
+                upsert_file(conn, _pending_row(root, remote, now), None)
+                old = None
+            jobs.append((remote, old))
+    known = _texts_known(conn) if jobs else frozenset()
+    try:
+        for remote, old, examined in _examine_all(connector, jobs, settings, report, known):
+            stored = _apply(conn, root, remote, old, examined, now, snapshots, report)
+            if stored is not None:
+                new_files.append(stored)
+        _settle_gone(conn, root, snapshots, report, gone, new_files, now)
+    finally:
+        snapshots.flush()
+        conn.commit()
+    report.seconds = time.perf_counter() - started
+    return _sorted(report)
 
 
 def _texts_known(conn: sqlite3.Connection) -> frozenset[str]:

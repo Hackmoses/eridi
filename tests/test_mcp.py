@@ -19,7 +19,15 @@ from eridi.core.service import Eridi
 from eridi.mcp.server import MAX_OUTPUT_CHARS, TRUNCATED_NOTE, build_server, fit
 
 PROTOCOL = "Protocols/Western_blot_blocking_v7.docx"
-READ_TOOLS = {"search", "file_history", "get_entry", "list_recent", "pending_changes", "show_diff"}
+READ_TOOLS = {
+    "search",
+    "file_history",
+    "get_entry",
+    "list_recent",
+    "recent_activity",
+    "pending_changes",
+    "show_diff",
+}
 
 
 @pytest.fixture

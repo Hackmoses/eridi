@@ -228,3 +228,112 @@ def dismiss(config: Config, change: PendingChange) -> Config:
     if change.key in config.dismissed_changes:
         return config
     return replace(config, dismissed_changes=(*config.dismissed_changes, change.key))
+
+
+BASELINE_PREFIX = "activity_baseline:"
+"""Index meta, per root: versions first seen up to this time (the root's first complete
+scan) were already there, so they aren't listed as "added"."""
+
+
+@dataclass(frozen=True)
+class Explanation:
+    entry_id: str
+    text: str
+    author: str
+    outcome: str | None
+
+
+@dataclass(frozen=True)
+class Activity:
+    """One thing that happened to a file: a new text version (edited) or a new file (added)."""
+
+    kind: Literal["edited", "added"]
+    at: str
+    file_id: int
+    root_id: str
+    path: str
+    title: str | None
+    root_label: str | None
+    status: str
+    from_text_sha256: str | None
+    to_text_sha256: str
+    summary: str | None
+    is_current: bool
+    explanations: tuple[Explanation, ...] = ()
+    needs_why: bool = False
+
+
+def recent_activity(
+    conn: sqlite3.Connection,
+    snapshots: SnapshotStore,
+    dismissed: Collection[str] = (),
+    limit: int = 50,
+    since: str | None = None,
+) -> list[Activity]:
+    """What changed recently across all storage, newest first."""
+    rows = conn.execute(
+        """
+        WITH v AS (
+            SELECT file_id, text_sha256, first_seen,
+                   lag(text_sha256) OVER (
+                       PARTITION BY file_id ORDER BY first_seen, rowid) AS previous
+            FROM text_versions
+        )
+        SELECT v.file_id, v.text_sha256, v.first_seen, v.previous,
+               f.root_id, f.path, f.title, f.status, f.text_sha256 AS current_sha,
+               r.label AS root_label
+        FROM v
+        JOIN files f ON f.id = v.file_id
+        LEFT JOIN roots r ON r.id = f.root_id
+        LEFT JOIN meta b ON b.key = ? || f.root_id
+        WHERE (v.previous IS NOT NULL OR v.first_seen > coalesce(b.value, '9999'))
+          AND (? IS NULL OR v.first_seen >= ?)
+        ORDER BY v.first_seen DESC, f.path
+        LIMIT ?
+        """,
+        (BASELINE_PREFIX, since, since, limit),
+    ).fetchall()
+    dismissed = set(dismissed)
+    out: list[Activity] = []
+    for r in rows:
+        sha = r["text_sha256"]
+        explanations = tuple(
+            Explanation(e[0], e[1], e[2], e[3])
+            for e in conn.execute(
+                "SELECT DISTINCT e.id, e.text, e.author_name, e.outcome FROM entries e "
+                "LEFT JOIN entry_subjects s ON s.entry_id = e.id "
+                "WHERE e.state = 'current' AND e.kind != 'tombstone' "
+                "AND (e.change_to_text_sha256 = ? OR s.text_sha256 = ?) ORDER BY e.id",
+                (sha, sha),
+            )
+        )
+        previous = r["previous"]
+        is_current = r["current_sha"] == sha
+        kind: Literal["edited", "added"] = "edited" if previous else "added"
+        summary = diff(snapshots, previous, sha).summary if previous else None
+        needs_why = (
+            kind == "edited"
+            and is_current
+            and r["status"] == "present"
+            and not explanations
+            and change_key(r["root_id"], previous, sha) not in dismissed
+        )
+        out.append(
+            Activity(
+                kind=kind,
+                at=r["first_seen"],
+                file_id=r["file_id"],
+                root_id=r["root_id"],
+                path=r["path"],
+                title=r["title"],
+                root_label=r["root_label"],
+                status=r["status"],
+                from_text_sha256=previous,
+                to_text_sha256=sha,
+                summary=summary,
+                is_current=is_current,
+                explanations=explanations,
+                needs_why=needs_why,
+            )
+        )
+    return out

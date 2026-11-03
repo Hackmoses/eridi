@@ -32,6 +32,7 @@ dependencies = [
     "tomli-w>=1.0",       # writes config.toml (the standard library only reads TOML)
     "typer>=0.12",        # command line
     "uvicorn>=0.31",
+    "watchdog>=4.0",      # live file watching (macOS FSEvents, Windows ReadDirectoryChangesW, inotify)
 ]
 
 [project.scripts]

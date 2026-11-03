@@ -189,6 +189,21 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .files a { margin-right: .75rem; }
 
 .storage { list-style: none; padding: 0; }
+
+.activity .day {
+  font-size: .8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+  margin: 1.25rem 0 .25rem;
+}
+.activity .day:first-child { margin-top: 0; }
+.event { padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.event h3 { font-size: 1rem; margin: .1rem 0; word-break: break-word; }
+.event .summary { margin: .25rem 0; }
+.event .why { margin: .25rem 0; white-space: pre-wrap; }
+.event .diffbox { margin-top: .5rem; }
 .switch { display: inline-flex !important; align-items: center; gap: .35rem; font-weight: 400 !important; }
 
 @media (max-width: 36rem) {

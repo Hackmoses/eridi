@@ -86,3 +86,27 @@ def test_search_and_explain_a_change(browser: Any, sample_lab: SampleLab, tmp_pa
             assert "Current version" in timeline
             assert errors == []
         assert eridi.pending_changes() == []
+
+
+def test_activity_updates_live_after_a_save(
+    browser: Any, sample_lab: SampleLab, tmp_path: Path
+) -> None:
+    with Eridi() as eridi:
+        eridi.init("A. Okafor", None, tmp_path / "record")
+        eridi.add_root(sample_lab.root, "Lab Drive")
+        eridi.scan()
+        with live_server(eridi, watch=True) as (port, guard):
+            page = browser.new_page()
+            page.goto(f"http://127.0.0.1:{port}/?t={guard.new_link()}")
+            page.get_by_role("link", name="Activity").click()
+            page.wait_for_selector("text=No edits yet")
+            doc = Document(str(sample_lab.protocol_docx))
+            doc.paragraphs[2].text = "Primary antibody incubation: 2 h at RT."
+            doc.save(str(sample_lab.protocol_docx))
+            # No clicks: the watcher records the save and the page refreshes itself.
+            page.wait_for_selector(".event", timeout=20_000)
+            text = page.inner_text(".activity")
+            assert "Edited" in text and "1 h at RT → 2 h at RT" in text
+            assert "Needs a why" in text
+            page.get_by_role("button", name="Diff").click()
+            page.wait_for_selector(".diff .add")

@@ -16,7 +16,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 
 ## Phase B — v0.5
 - [ ] M8 Projects
-- [ ] M9 Shared record and watching
+- [ ] M9 Shared record and watching (file watcher pulled forward on 2026-11-03; shared record still to do)
 - [ ] M10 Microsoft connector
 
 ## Phase C — v0.6 → v1
@@ -60,3 +60,4 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - 2026-11-03 Search ranking in tiers (as asked): exact phrase → all words within 10 words of each other in any order (`NEAR`) → all words anywhere → each single word alone, rarest word first (fewest matching files and entries). Within a tier, BM25 with the record boost. Word forms match through stemming (protein/proteins). `SearchHit.match` and `.term` carry the tier; CLI, web app and MCP show group headings. True meaning-based search (synonyms, related ideas) needs a local embedding model, which belongs with M15.
 - 2026-11-03 Decision: meaning-based search (local embedding model) is on hold. Option to revisit: expand the query with a frontier model the user enables (only the search words are sent, e.g. "myelin protein" → MBP, PLP1, P0, never document text), then run the normal keyword tiers. Cheap, nothing to install, and fits the "no document content leaves the machine" rule. Decide with M15.
 - 2026-11-03 Search snippets are built in Python around the best match (rough stemming for highlights, whole phrase marked for exact matches) instead of SQLite's snippet(), which re-read whole documents: searches for common words on the 1,910-file benchmark went from 82–89 ms to 5–9 ms. Ranking queries were already under 1 ms.
+- 2026-11-03 Pulled forward from M9 at the user's request: live watching (`watchdog`). While `eridi open` (or `eridi watch`) runs, each local root with search on is watched; saves are batched for 2 s, then only those files are scanned (`scan_files`), including deletes and renames. Setting `settings.watch` (default on). New Activity feed (`Eridi.activity`, `eridi activity`, web Activity page, MCP `recent_activity`): every edit and new file, newest first, with summary, diff, and the note that explains it or "needs a why". A root's first complete scan is its baseline, so existing files aren't listed as added. The web page polls status every 5 s and refreshes itself when something changed.

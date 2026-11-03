@@ -15,11 +15,15 @@ from eridi.core.service import Eridi
 
 
 @contextmanager
-def live_server(eridi: Eridi) -> Iterator[tuple[int, Guard]]:
+def live_server(eridi: Eridi, *, watch: bool = False) -> Iterator[tuple[int, Guard]]:
     sock = free_socket()
     port = sock.getsockname()[1]
     app = create_app(
-        eridi, token=get_or_create_token(), port=port, scanner=BackgroundScanner(eridi, 0)
+        eridi,
+        token=get_or_create_token(),
+        port=port,
+        scanner=BackgroundScanner(eridi, 0),
+        watch=watch,
     )
     server = uvicorn.Server(uvicorn.Config(app, log_level="warning", lifespan="on"))
     thread = threading.Thread(target=server.run, kwargs={"sockets": [sock]}, daemon=True)

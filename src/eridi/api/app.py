@@ -22,6 +22,7 @@ from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import COOKIE_NAME, Guard, get_or_create_token
 from eridi.core.paths import app_home
 from eridi.core.service import Eridi
+from eridi.core.watch import Watcher
 
 log = logging.getLogger(__name__)
 
@@ -44,18 +45,25 @@ def create_app(
     port: int,
     scanner: BackgroundScanner | None = None,
     on_ready: Callable[[Guard], None] | None = None,
+    watch: bool | None = None,
 ) -> FastAPI:
+    """`watch=None` follows `settings.watch`."""
     guard = Guard(token, port)
     scanner = scanner or BackgroundScanner(eridi, eridi.config.settings.scan_interval_minutes)
+    watcher = Watcher(eridi) if (eridi.config.settings.watch if watch is None else watch) else None
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scanner.start()
+        if watcher is not None:
+            watcher.start()
         if on_ready is not None:
             on_ready(guard)
         try:
             yield
         finally:
+            if watcher is not None:
+                watcher.stop()
             scanner.stop()
 
     app = FastAPI(title="Eridi", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)

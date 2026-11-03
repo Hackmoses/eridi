@@ -193,6 +193,33 @@ def build_server(eridi: Eridi) -> MCPServer:
 
     @server.tool(annotations=READ_ONLY)
     @friendly
+    def recent_activity(limit: int = 30) -> str:
+        """What was edited or added recently across the lab's files, newest first, with a
+        one-line summary of each edit and any note explaining it."""
+        items = eridi.activity(max(1, min(limit, 200)))
+        return fit(
+            {
+                "activity": [
+                    {
+                        "at": a.at,
+                        "kind": a.kind,
+                        "file_id": f"{a.root_id}:{a.path}",
+                        "path": a.path,
+                        "storage": a.root_label,
+                        "summary": a.summary,
+                        "notes": [
+                            {"entry_id": n.entry_id, "text": n.text, "author": n.author}
+                            for n in a.explanations
+                        ],
+                        "needs_why": a.needs_why,
+                    }
+                    for a in items
+                ]
+            }
+        )
+
+    @server.tool(annotations=READ_ONLY)
+    @friendly
     def pending_changes(project: str | None = None) -> str:
         """Files whose text changed and that nobody has explained yet."""
         changes = eridi.pending_changes(project)

@@ -139,6 +139,60 @@ function renderSearch(params) {
   if (query) run();
 }
 
+function dayLabel(timestamp) {
+  const d = new Date(timestamp);
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+}
+
+async function renderActivity() {
+  const list = el("div", { class: "activity" });
+  main.replaceChildren(el("h1", {}, "Activity"), list);
+  try {
+    const data = await api("/activity?limit=100");
+    if (!data.activity.length) {
+      list.append(el("p", { class: "muted" }, "No edits yet. Changes appear here seconds after you save a file."));
+      return;
+    }
+    let day = null;
+    for (const a of data.activity) {
+      const label = dayLabel(a.at);
+      if (label !== day) {
+        day = label;
+        list.append(el("h2", { class: "day" }, label));
+      }
+      list.append(activityItem(a));
+    }
+  } catch (error) { showError(list, error); }
+}
+
+function activityItem(a) {
+  const time = new Date(a.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const diffBox = el("div", { class: "diffbox", hidden: true });
+  const toggle = a.kind === "edited" ? el("button", { type: "button", class: "link", "aria-expanded": "false",
+    onclick: async () => {
+      const open = diffBox.hidden;
+      diffBox.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+      if (open && !diffBox.childElementCount) {
+        const query = `/diff?file=${encodeURIComponent(a.file_id)}&from=${a.from}&to=${a.to}`;
+        try { diffBox.append(diffView(await api(query))); } catch (error) { showError(diffBox, error); }
+      }
+    } }, "Diff") : null;
+  return el("article", { class: "event" },
+    el("div", { class: "meta" }, time, " · ", a.kind === "edited" ? "Edited" : "Added",
+      a.storage ? " · " + a.storage : "", a.status !== "present" ? " · " + a.status : ""),
+    el("h3", {}, historyLink(a.file_id, a.path)),
+    a.summary ? el("p", { class: "summary" }, a.summary) : null,
+    a.notes.map((n) => el("p", { class: "why" }, n.text,
+      el("span", { class: "muted" }, " — " + n.author), n.outcome ? el("span", { class: "outcome outcome-" + n.outcome }, n.outcome) : null)),
+    a.needs_why ? el("p", {}, el("a", { href: "#/changes" }, "Needs a why")) : null,
+    toggle, diffBox);
+}
+
 async function renderChanges() {
   main.replaceChildren(el("h1", {}, "Changes"));
   const list = el("div", { class: "changes" });
@@ -272,9 +326,17 @@ const scanStatus = document.getElementById("scan-status");
 const pendingBadge = document.getElementById("pending-count");
 let polling = null;
 
+let lastActivity;
+
 async function refreshStatus() {
   try {
     const s = await api("/status");
+    if (lastActivity !== undefined && s.last_activity !== lastActivity) {
+      // Something was just saved or scanned: refresh the lists that show it.
+      if (location.hash.startsWith("#/activity")) renderActivity();
+      else if (location.hash.startsWith("#/changes")) renderChanges();
+    }
+    lastActivity = s.last_activity;
     if (s.pending_count !== null) {
       pendingBadge.hidden = !s.pending_count;
       pendingBadge.textContent = s.pending_count || "";
@@ -321,6 +383,7 @@ function route() {
     else a.removeAttribute("aria-current");
   });
   if (name === "changes") renderChanges();
+  else if (name === "activity") renderActivity();
   else if (name === "history") renderHistory(params);
   else if (name === "storage") renderStorage();
   else renderSearch(params);
@@ -329,4 +392,4 @@ function route() {
 window.addEventListener("hashchange", route);
 route();
 refreshStatus();
-setInterval(refreshStatus, 30000);
+setInterval(refreshStatus, 5000);

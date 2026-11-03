@@ -10,6 +10,7 @@ import urllib.error
 import urllib.request
 import webbrowser
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -19,13 +20,13 @@ from rich.markup import escape
 from rich.text import Text
 
 from eridi import __version__
-from eridi.core.changes import FileDiff
+from eridi.core.changes import Activity, FileDiff
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit, group_label, parse_query
 from eridi.core.models import OUTCOMES, Entry, FileInfo, parse_timestamp
 from eridi.core.record.store import RecordFolderError
-from eridi.core.scan import ScanProgress
+from eridi.core.scan import ScanProgress, ScanReport
 from eridi.core.service import (
     AmbiguousFileError,
     Eridi,
@@ -528,6 +529,71 @@ def history_command(
                 out.print(f"    [dim]{escape(item.entry.change.summary)}[/dim]")
             if item.entry.text:
                 out.print(f"    {escape(item.entry.text)}")
+
+
+def print_activity(items: list[Activity]) -> None:
+    out = console()
+    day = None
+    for a in items:
+        moment = parse_timestamp(a.at).astimezone()
+        label = moment.strftime("%A %d %B")
+        if label != day:
+            day = label
+            out.print(f"[bold]{label}[/bold]")
+        verb = "edited" if a.kind == "edited" else "added"
+        out.print(f"  {moment:%H:%M}  {verb:<6}  {escape(a.path)}")
+        if a.summary:
+            out.print(f"           [dim]{escape(a.summary)}[/dim]")
+        for note_ in a.explanations:
+            out.print(f"           why: {escape(note_.text)}  [dim]{escape(note_.author)}[/dim]")
+        if a.needs_why:
+            out.print(f"           [yellow]needs a why[/yellow]: eridi why {escape(a.path)!r}")
+
+
+@app.command()
+def activity(
+    limit: Annotated[int, typer.Option(min=1, max=1000)] = 30,
+) -> None:
+    """Show what you edited or added recently, newest first."""
+    with session() as eridi:
+        items = eridi.activity(limit)
+        if not items:
+            console().print("No edits yet. Run `eridi scan` (or `eridi watch`) after saving files.")
+            return
+        print_activity(items)
+
+
+@app.command()
+def watch() -> None:
+    """Watch your storage and record edits seconds after you save (Ctrl+C to stop)."""
+    from eridi.core.watch import Watcher
+
+    with session() as eridi:
+        if not eridi.list_roots():
+            raise EridiError("No storage connected. Add a folder with: eridi storage add <folder>")
+        out = console()
+
+        def report(root_id: str, scanned: ScanReport) -> None:
+            label = eridi.root_label(root_id) or root_id
+            stamp = datetime.now().strftime("%H:%M:%S")
+            for path in scanned.changed:
+                out.print(f"{stamp}  [bold]edited[/bold]  {escape(label)} · {escape(path)}")
+            for path in scanned.new:
+                out.print(f"{stamp}  added   {escape(label)} · {escape(path)}")
+            for old, new in scanned.moved:
+                out.print(f"{stamp}  moved   {escape(old)} → {escape(new)}")
+            for path in scanned.missing:
+                out.print(f"{stamp}  removed {escape(path)}")
+
+        watcher = Watcher(eridi, on_report=report)
+        watcher.start()
+        names = ", ".join(r.label for r in eridi.list_roots() if r.search)
+        out.print(f"Watching {escape(names)}. Save a file to see it here. Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(1)
+        finally:
+            watcher.stop()
 
 
 @app.command()

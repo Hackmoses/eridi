@@ -29,6 +29,8 @@ uv run eridi scan
 uv run eridi search "blocking buffer"
 uv run eridi changes                    # files that changed and need a why
 uv run eridi why <file>                 # shows the diff, asks why
+uv run eridi activity                   # what you edited recently, newest first
+uv run eridi watch                      # record edits seconds after you save
 uv run eridi open                       # the web app in your browser
 ```
 

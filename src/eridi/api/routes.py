@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import Guard
-from eridi.core.changes import FileDiff, PendingChange
+from eridi.core.changes import Activity, FileDiff, PendingChange
 from eridi.core.config import ConfigError
 from eridi.core.index.search import SearchHit, group_label
 from eridi.core.models import Entry, FileInfo, Root
@@ -175,6 +175,7 @@ def status(request: Request) -> dict[str, Any]:
         "user": eridi.config.user.name or None,
         "storage_count": len(eridi.list_roots()),
         "pending_count": pending,
+        "last_activity": eridi.last_activity or scan.last_finished,
         "scan": {
             "running": scan.running,
             "last_started": scan.last_started,
@@ -241,6 +242,36 @@ def add_outcome(request: Request, body: OutcomeIn) -> Any:
     except KNOWN_ERRORS as exc:
         return error(exc)
     return JSONResponse(entry_json(eridi, entry), status_code=201)
+
+
+def activity_json(a: Activity) -> dict[str, Any]:
+    return {
+        "kind": a.kind,
+        "at": a.at,
+        "file_id": f"{a.root_id}:{a.path}",
+        "path": a.path,
+        "title": a.title,
+        "storage": a.root_label,
+        "status": a.status,
+        "summary": a.summary,
+        "from": a.from_text_sha256,
+        "to": a.to_text_sha256,
+        "current": a.is_current,
+        "needs_why": a.needs_why,
+        "notes": [
+            {"id": e.entry_id, "text": e.text, "author": e.author, "outcome": e.outcome}
+            for e in a.explanations
+        ],
+    }
+
+
+@router.get("/activity")
+def activity(request: Request, limit: int = 50) -> Any:
+    try:
+        items = _eridi(request).activity(max(1, min(limit, 500)))
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return {"activity": [activity_json(a) for a in items]}
 
 
 @router.get("/history")

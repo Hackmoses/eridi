@@ -41,6 +41,8 @@ class Settings:
     """How often the app scans in the background while it is open; 0 turns it off."""
     scan_workers: int = 0
     """Processes reading files in parallel during a scan; 0 means one per CPU core."""
+    watch: bool = True
+    """While the app runs, notice saved files within seconds instead of waiting to scan."""
 
     @property
     def size_limit_bytes(self) -> int:

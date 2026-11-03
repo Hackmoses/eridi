@@ -169,6 +169,29 @@ class LocalConnector:
             is_placeholder=is_placeholder(st),
         )
 
+    def is_ignored(self, path: str) -> bool:
+        """True if a root-relative POSIX path is excluded by the ignore rules."""
+        spec = build_ignore_spec(self.root, self._extra_ignores)
+        parts = path.split("/")
+        # A file inside an ignored folder is ignored too.
+        for i in range(1, len(parts)):
+            if spec.match_file("/".join(parts[:i]) + "/"):
+                return True
+        return spec.match_file(path)
+
+    def describe(self, path: str) -> RemoteFile | None:
+        """One file's current state, or None if it's gone, ignored or not a regular file."""
+        try:
+            rel = normalize_relative(path)
+        except ValueError:
+            return None
+        if self.is_ignored(rel):
+            return None
+        full = self.root.joinpath(*rel.split("/"))
+        if not full.exists():
+            return None
+        return self._describe(full, rel, self._resolved_root())
+
     def _full_path(self, path: str) -> Path:
         rel = normalize_relative(path)
         full = self.root.joinpath(*rel.split("/"))
