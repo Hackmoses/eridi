@@ -89,7 +89,8 @@ def test_crash_between_temp_write_and_rename(
     def crash(src: object, dst: object) -> None:
         raise KeyboardInterrupt("power cut")
 
-    monkeypatch.setattr(os, "replace", crash)
+    for name in ("replace", "rename", "link"):
+        monkeypatch.setattr(os, name, crash)
     with pytest.raises(KeyboardInterrupt):
         store.append(entry())
     monkeypatch.undo()
@@ -189,3 +190,18 @@ def test_logs_never_contain_entry_text(
     with caplog.at_level(logging.DEBUG):
         store.read()
     assert private not in caplog.text
+
+
+def test_no_overwrite_without_hard_links(
+    store: RecordStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_links(src: object, dst: object) -> None:
+        raise OSError("hard links not supported")
+
+    monkeypatch.setattr(os, "link", no_links)
+    e = entry()
+    path = store.append(e)
+    with pytest.raises(FileExistsError):
+        store.append(e)
+    assert store.read().entries == [e]
+    assert path.is_file()

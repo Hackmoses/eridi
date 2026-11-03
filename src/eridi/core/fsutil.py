@@ -41,13 +41,34 @@ def atomic_write_bytes(
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-        if not overwrite and target.exists():
-            raise FileExistsError(f"{target} already exists and will not be overwritten.")
-        _replace(tmp, target)
+        if overwrite:
+            _replace(tmp, target)
+        else:
+            _place_new(tmp, target)
     finally:
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
     fsync_dir(target.parent)
+
+
+def _place_new(source: Path, target: Path) -> None:
+    """Move `source` to `target` atomically, failing if `target` exists."""
+    exists = FileExistsError(f"{target} already exists and will not be overwritten.")
+    if sys.platform == "win32":
+        try:
+            source.rename(target)  # Windows rename never replaces an existing file
+        except FileExistsError:
+            raise exists from None
+        return
+    try:
+        os.link(source, target)  # atomic, and fails if the name is taken
+    except FileExistsError:
+        raise exists from None
+    except OSError:
+        # Some file systems (FAT, some network and sync mounts) have no hard links.
+        if target.exists():
+            raise exists from None
+        _replace(source, target)
 
 
 def _replace(source: Path, target: Path) -> None:
