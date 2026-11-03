@@ -18,17 +18,22 @@ useful as AI improves.
 
 ## Status
 
-The engine's foundations are in place: the record store, local folders, text extraction,
-and search. There is no command line or app yet (from milestone M5). To try the pieces on
-your own folders:
+v0, pre-alpha: the command line, the local web app and the MCP server work on local and
+synced folders. Try it:
 
 ```bash
 uv sync
-uv run python scripts/check_extract.py "<a lab folder>"
-uv run python scripts/check_search.py "<a lab folder>" "blocking buffer"
-uv run python scripts/check_record.py write "<a record folder>" --device "Mac"
-uv run python scripts/check_record.py read "<a record folder>"
+uv run eridi init                       # your name, and where to keep the record
+uv run eridi storage add "<lab folder>"
+uv run eridi scan
+uv run eridi search "blocking buffer"
+uv run eridi changes                    # files that changed and need a why
+uv run eridi why <file>                 # shows the diff, asks why
+uv run eridi open                       # the web app in your browser
 ```
+
+`uv run eridi --help` lists every command. To use Eridi from Claude, see
+[`docs/MCP.md`](docs/MCP.md).
 
 See:
 

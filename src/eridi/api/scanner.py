@@ -42,20 +42,25 @@ def summary_json(eridi: Eridi, summary: ScanSummary) -> dict[str, Any]:
 
 
 class BackgroundScanner:
-    def __init__(self, eridi: Eridi, interval_minutes: int) -> None:
+    def __init__(
+        self, eridi: Eridi, interval_minutes: float, *, scan_on_start: bool = True
+    ) -> None:
+        """`interval_minutes <= 0` turns timed scans off; scans then run only on request."""
         self.eridi = eridi
         self.interval = interval_minutes * 60 if interval_minutes > 0 else None
+        self.scan_on_start = scan_on_start
         self.status = ScanStatus()
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._run_lock = threading.Lock()
+        self._count = 0
 
     def start(self) -> None:
         if self._thread is None:
             self._thread = threading.Thread(target=self._loop, name="eridi-scan", daemon=True)
             self._thread.start()
-            if self.interval is not None:
+            if self.interval is not None and self.scan_on_start:
                 self._wake.set()  # scan once on start, then every interval
 
     def stop(self) -> None:
@@ -89,6 +94,10 @@ class BackgroundScanner:
                 self.status.last_finished = utc_now()
         return self.status
 
+    @property
+    def scans(self) -> int:
+        return self._count
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             self._wake.wait(timeout=self.interval)
@@ -97,3 +106,4 @@ class BackgroundScanner:
                 break
             if self.eridi.list_roots():
                 self.run_now()
+                self._count += 1

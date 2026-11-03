@@ -270,8 +270,10 @@ let polling = null;
 async function refreshStatus() {
   try {
     const s = await api("/status");
-    pendingBadge.hidden = !s.pending_count;
-    pendingBadge.textContent = s.pending_count || "";
+    if (s.pending_count !== null) {
+      pendingBadge.hidden = !s.pending_count;
+      pendingBadge.textContent = s.pending_count || "";
+    }
     scanButton.disabled = s.scan.running || !s.storage_count;
     scanStatus.textContent = s.scan.running ? "Scanning…"
       : s.scan.last_error ? "Scan failed: " + s.scan.last_error

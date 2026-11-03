@@ -166,11 +166,13 @@ class StorageIn(BaseModel):
 def status(request: Request) -> dict[str, Any]:
     eridi = _eridi(request)
     scan = _scanner(request).status
+    # While a scan runs it holds the index; answer at once instead of waiting for it.
+    pending = None if scan.running else len(eridi.pending_changes())
     return {
         "initialized": eridi.initialized,
         "user": eridi.config.user.name or None,
         "storage_count": len(eridi.list_roots()),
-        "pending_count": len(eridi.pending_changes()),
+        "pending_count": pending,
         "scan": {
             "running": scan.running,
             "last_started": scan.last_started,
