@@ -66,10 +66,12 @@ CREATE TABLE entries (
     text TEXT NOT NULL,
     supersedes TEXT,
     target_id TEXT,
+    change_to_text_sha256 TEXT,
     state TEXT NOT NULL,
     json TEXT NOT NULL
 );
 CREATE INDEX entries_project ON entries (project_id);
+CREATE INDEX entries_change ON entries (change_to_text_sha256);
 CREATE TABLE entry_subjects (
     entry_id TEXT NOT NULL REFERENCES entries (id) ON DELETE CASCADE,
     root_id TEXT NOT NULL,
