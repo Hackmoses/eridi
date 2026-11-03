@@ -13,6 +13,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from eridi.connectors import connector_for
@@ -48,6 +49,7 @@ from eridi.core.changes import (
     recent_activity,
 )
 from eridi.core.config import Config, User, config_path, load_config, save_config
+from eridi.core.export import export_csv, export_markdown
 from eridi.core.ids import is_ulid, new_id
 from eridi.core.index.cloud import CURSOR_PREFIX, IndexDeltaCache
 from eridi.core.index.db import check_fts5, get_meta, index_path, open_index, set_meta
@@ -1230,6 +1232,27 @@ class Eridi:
             else:
                 entries = self._entries_where("1 = 1", [])
             return open_questions(entries, self.pending_changes(pid), self.outcomes(), days)
+
+    def export_project(self, ref: str, fmt: str = "md", period: Period | None = None) -> str:
+        """A project's record as Markdown (`md`) or CSV (`csv`), optionally for one period."""
+        if fmt not in ("md", "csv"):
+            raise EridiError("Export as md (Markdown) or csv.")
+        with self._lock:
+            self._refresh_records()
+            project = self._get_project(ref)
+            condition = entry_in_project_sql("entries")
+            params: list[object] = [project.id, project.id]
+            if period is not None:
+                condition += " AND created_at >= ? AND created_at < ?"
+                params += [period.since, period.until]
+            entries = self._entries_where(condition, params)
+            outcomes = self.outcomes()
+            if fmt == "csv":
+                return export_csv(entries, outcomes, self.root_label)
+            return export_markdown(
+                project, entries, outcomes, self.root_label, now=datetime.now(UTC),
+                period_label=period.label if period else None,
+            )  # fmt: skip
 
     # --- scanning and the index ---
 

@@ -1,0 +1,140 @@
+[
+  {
+    "schema": "eridi.record/1",
+    "id": "01JC7B0000000000000000000A",
+    "kind": "project",
+    "created_at": "2026-10-01T09:00:00.000Z",
+    "author": {
+      "name": "A. Okafor",
+      "kind": "human",
+      "email": "a.okafor@example.edu"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [],
+    "text": "",
+    "project_id": "proj_01JC8X0000000000000000000A",
+    "project": {
+      "id": "proj_01JC8X0000000000000000000A",
+      "name": "Antibody validation",
+      "home_root_id": "root_01JC8W0000000000000000000A",
+      "labels": [
+        "patient-data"
+      ]
+    }
+  },
+  {
+    "schema": "eridi.record/1",
+    "id": "01JC9A0000000000000000000A",
+    "kind": "note",
+    "created_at": "2026-10-14T13:05:22.481Z",
+    "author": {
+      "name": "A. Okafor",
+      "kind": "human",
+      "email": "a.okafor@example.edu"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [
+      {
+        "root_id": "root_01JC8W0000000000000000000A",
+        "root_label": "Lab OneDrive",
+        "path": "Protocols/WB_blocking_v7.docx",
+        "text_sha256": "41ab"
+      }
+    ],
+    "text": "Signal was weak with the new antibody lot (#B2291).\nLonger incubation restored band intensity.",
+    "project_id": "proj_01JC8X0000000000000000000A",
+    "change": {
+      "from_text_sha256": "77de",
+      "to_text_sha256": "41ab",
+      "summary": "Primary antibody incubation: 1 h at RT → 2 h at RT"
+    },
+    "outcome": "partial",
+    "tags": [
+      "antibody",
+      "lot-change"
+    ]
+  },
+  {
+    "schema": "eridi.record/1",
+    "id": "01JC9B0000000000000000000A",
+    "kind": "decision",
+    "created_at": "2026-10-20T08:00:00.000Z",
+    "author": {
+      "name": "A. Okafor",
+      "kind": "human",
+      "email": "a.okafor@example.edu"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [],
+    "text": "Switch blocking buffer from milk to BSA for phospho targets.",
+    "project_id": "proj_01JC8X0000000000000000000A"
+  },
+  {
+    "schema": "eridi.record/1",
+    "id": "01JC9C0000000000000000000A",
+    "kind": "outcome",
+    "created_at": "2026-10-28T16:30:00.000Z",
+    "author": {
+      "name": "A. Okafor",
+      "kind": "human",
+      "email": "a.okafor@example.edu"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [],
+    "text": "Bands clear on the 27 Oct blot, \"good\" contrast.",
+    "project_id": "proj_01JC8X0000000000000000000A",
+    "target_id": "01JC9A0000000000000000000A",
+    "outcome": "worked"
+  },
+  {
+    "schema": "eridi.record/1",
+    "id": "01JCA00000000000000000000A",
+    "kind": "note",
+    "created_at": "2026-11-02T10:15:00.000Z",
+    "author": {
+      "name": "Claude (for A. Okafor)",
+      "kind": "agent"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [
+      {
+        "root_id": "root_01JC8W0000000000000000000A",
+        "path": "Results/gel_2026-11-02.csv"
+      }
+    ],
+    "text": "Lane 3 shows a second band at 37 kDa.",
+    "project_id": "proj_01JC8X0000000000000000000A"
+  },
+  {
+    "schema": "eridi.record/1",
+    "id": "01JCA10000000000000000000A",
+    "kind": "note",
+    "created_at": "2026-11-02T11:00:00.000Z",
+    "author": {
+      "name": "A. Okafor",
+      "kind": "human",
+      "email": "a.okafor@example.edu"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [],
+    "text": "Wrong lane, ignore.",
+    "project_id": "proj_01JC8X0000000000000000000A",
+    "outcome": "failed"
+  },
+  {
+    "schema": "eridi.record/1",
+    "id": "01JCA20000000000000000000A",
+    "kind": "tombstone",
+    "created_at": "2026-11-02T11:05:00.000Z",
+    "author": {
+      "name": "A. Okafor",
+      "kind": "human",
+      "email": "a.okafor@example.edu"
+    },
+    "device_id": "dev_01JC8Y0000000000000000000A",
+    "subjects": [],
+    "text": "Posted to the wrong project.",
+    "project_id": "proj_01JC8X0000000000000000000A",
+    "target_id": "01JCA10000000000000000000A"
+  }
+]

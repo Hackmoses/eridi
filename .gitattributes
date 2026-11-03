@@ -3,3 +3,4 @@
 *.pdf binary
 *.docx binary
 *.xlsx binary
+tests/fixtures/export/* -text

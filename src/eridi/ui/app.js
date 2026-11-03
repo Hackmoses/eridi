@@ -673,6 +673,10 @@ function viewsPanel(p) {
         : el("div", {}, el("div", { class: "meta" }, ago(item.since)), entryCard(item.entry, null, again)))))
       : empty(`No open questions older than ${d.days} days.`);
   });
+  const base = "/api/projects/" + encodeURIComponent(p.id) + "/export?format=";
+  tabs.append(
+    el("a", { class: "button secondary", href: base + "md", download: "" }, "Export Markdown"),
+    el("a", { class: "button secondary", href: base + "csv", download: "" }, "Export CSV"));
   return el("section", { "aria-labelledby": "views-h" }, el("h2", { id: "views-h", class: "visually-hidden" }, "Views"), tabs, panel);
 }
 

@@ -210,6 +210,33 @@ def build_server(eridi: Eridi) -> MCPServer:
 
     @server.tool(annotations=READ_ONLY)
     @friendly
+    def failures(file: str | None = None, project: str | None = None) -> str:
+        """Everything recorded as failed: for one file (all its versions and earlier names),
+        a project, or the whole lab. Each item is the note or decision, or a file version,
+        and the outcome entry that judged it failed. Newest first."""
+        found = eridi.failures(file=file, project=project)
+        return fit({"failures": [
+            {"entry": entry_json(eridi, f.entry), "judged_by": entry_json(eridi, f.verdict.entry),
+             "path": f.path}
+            for f in found
+        ]})  # fmt: skip
+
+    @server.tool(annotations=READ_ONLY)
+    @friendly
+    def open_questions(project: str | None = None, days: int | None = None) -> str:
+        """Changes and decisions still without an outcome ("did it work?") after `days`
+        (default: the lab's setting, usually 14), and file changes still without a why.
+        Oldest first."""
+        found = eridi.open_questions(project=project, days=days)
+        return fit({"questions": [
+            {"kind": q.kind, "since": q.since, "path": q.path,
+             "entry": entry_json(eridi, q.entry) if q.entry else None,
+             "summary": q.change.summary if q.change else None}
+            for q in found
+        ]})  # fmt: skip
+
+    @server.tool(annotations=READ_ONLY)
+    @friendly
     def get_entry(entry_id: str) -> str:
         """One record entry by its ID."""
         return fit(entry_json(eridi, eridi.get_entry(entry_id)))

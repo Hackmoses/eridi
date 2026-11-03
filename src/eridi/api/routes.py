@@ -3,7 +3,7 @@
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
 from eridi.api.google import GoogleSignIn
@@ -650,6 +650,28 @@ def view_questions(request: Request, project: str | None = None, days: int | Non
             for q in found
         ],
     }
+
+
+@router.get("/projects/{project_id}/export")
+def export_project(
+    request: Request, project_id: str, format: str = "md", month: str | None = None,
+    since: str | None = None,
+) -> Any:  # fmt: skip
+    """The project's record as a Markdown or CSV download."""
+    eridi = _eridi(request)
+    try:
+        period = _period(month, since) if month or since else None
+        text = eridi.export_project(project_id, format, period)
+        name = eridi.get_project(project_id).name
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name).strip() or "record"
+    media = "text/csv" if format == "csv" else "text/markdown"
+    return Response(
+        text.encode("utf-8"),
+        media_type=f"{media}; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{safe}.{format}"'},
+    )
 
 
 MAX_SAVE_BYTES = 500 * 1024 * 1024

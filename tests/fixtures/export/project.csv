@@ -1,0 +1,6 @@
+id,created_at,kind,author,author_kind,storage,file,change,text,outcome,result,about_entry,tags
+01JC9A0000000000000000000A,2026-10-14T13:05:22.481Z,note,A. Okafor,human,Lab OneDrive,Protocols/WB_blocking_v7.docx,Primary antibody incubation: 1 h at RT → 2 h at RT,"Signal was weak with the new antibody lot (#B2291).
+Longer incubation restored band intensity.",partial,worked,,"antibody, lot-change"
+01JC9B0000000000000000000A,2026-10-20T08:00:00.000Z,decision,A. Okafor,human,,,,Switch blocking buffer from milk to BSA for phospho targets.,,,,
+01JC9C0000000000000000000A,2026-10-28T16:30:00.000Z,outcome,A. Okafor,human,,,,"Bands clear on the 27 Oct blot, ""good"" contrast.",worked,worked,01JC9A0000000000000000000A,
+01JCA00000000000000000000A,2026-11-02T10:15:00.000Z,note,Claude (for A. Okafor),agent,Lab OneDrive,Results/gel_2026-11-02.csv,,Lane 3 shows a second band at 37 kDa.,,,,

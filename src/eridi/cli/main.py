@@ -1038,6 +1038,35 @@ def questions(
             )
 
 
+@app.command("export")
+def export_command(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    format_: Annotated[
+        str, typer.Option("--format", help="md (Markdown, for lab meetings) or csv.")
+    ] = "md",
+    month_: Annotated[str | None, typer.Option("--month", help="Only this month, YYYY-MM.")] = None,
+    since: Annotated[str | None, typer.Option(help="Only since YYYY-MM-DD.")] = None,
+    out: Annotated[
+        Path | None, typer.Option("--out", help="Write to this file (default: print it).")
+    ] = None,
+) -> None:
+    """Export a project's record as Markdown or CSV."""
+    with session() as eridi:
+        period = make_period(month_, since) if month_ or since else None
+        text = eridi.export_project(project, format_.lower().lstrip("."), period)
+        if out is None:
+            sys.stdout.write(text)
+            return
+        target = out.expanduser()
+        if target.exists():
+            raise EridiError(f"{target} already exists. Choose another name.")
+        try:
+            target.write_text(text, encoding="utf-8", newline="")
+        except OSError as exc:
+            raise EridiError(f"Could not write {target}: {exc.strerror or exc}") from None
+        console().print(f"Saved {escape(str(target))}.")
+
+
 @app.command("history")
 def history_command(
     file: Annotated[str, typer.Argument(help="A path, part of a file name, or a file ID.")],

@@ -20,6 +20,8 @@ from eridi.mcp.server import MAX_OUTPUT_CHARS, TRUNCATED_NOTE, build_server, fit
 
 PROTOCOL = "Protocols/Western_blot_blocking_v7.docx"
 READ_TOOLS = {
+    "failures",
+    "open_questions",
     "search",
     "file_history",
     "get_entry",
@@ -227,3 +229,16 @@ def test_projects_for_assistants(lab: Eridi, sample_lab: SampleLab) -> None:
     assert [c["path"] for c in data["changes"]] == []  # the note above explained it
     error, text = call(lab, "search", query="x", project="nothing")
     assert error and "No project matches" in text
+
+
+def test_failures_and_open_questions(lab: Eridi) -> None:
+    """M13: assistants can ask what failed and what's still open."""
+    error, data = call(lab, "open_questions", days=0)
+    assert not error and data["questions"][0]["kind"] == "no_why"
+    note = lab.add_note("Longer incubation for the new lot.", file=PROTOCOL)
+    error, data = call(lab, "open_questions", days=0)
+    assert data["questions"][0]["entry"]["id"] == note.id
+    lab.add_outcome("failed", entry_id=note.id, text="Still faint.")
+    error, data = call(lab, "failures", file=PROTOCOL)
+    assert not error and data["failures"][0]["judged_by"]["text"] == "Still faint."
+    assert call(lab, "open_questions", days=0)[1]["questions"] == []
