@@ -19,7 +19,7 @@ useful as AI improves.
 ## Status
 
 v0.5, pre-alpha: the command line, the local web app and the MCP server work on local and
-synced folders, with projects and a record shared by the lab. Try it:
+synced folders and Microsoft OneDrive/SharePoint, with projects and a record shared by the lab. Try it:
 
 ```bash
 uv sync
@@ -34,6 +34,7 @@ uv run eridi watch                      # record edits seconds after you save
 uv run eridi open                       # the web app in your browser
 uv run eridi project new "Antibody validation" --folder "<folder>"
 uv run eridi init --join "<shared record folder>"   # share a labmate's record
+uv run eridi storage add-microsoft      # OneDrive and SharePoint, read-only
 ```
 
 `uv run eridi --help` lists every command. To use Eridi from Claude, see
@@ -46,6 +47,8 @@ See:
 - [`docs/RECORD_FORMAT.md`](docs/RECORD_FORMAT.md): the open record format
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): what's done
 - [`docs/MCP.md`](docs/MCP.md): using Eridi from Claude and other AI assistants
+- [`docs/MICROSOFT.md`](docs/MICROSOFT.md): OneDrive and SharePoint;
+  [`docs/IT_APPROVAL.md`](docs/IT_APPROVAL.md) for university IT
 
 ## Building with an AI agent
 
