@@ -66,11 +66,16 @@ src/eridi/
     scan.py          walk roots via connectors; detect new/changed/removed; extract; snapshot
     snapshots.py     content-addressed gzipped text store; eviction
     changes.py       compute pending changes (changed files with no explaining note); diffs
+    outbox.py        files saved through the app: kept locally, uploaded, retried (M11)
     service.py       the engine's public API used by CLI, API and MCP (one class: Eridi)
   connectors/
     base.py          Connector protocol (below)
     local.py         local and synced folders
+    http.py          HTTPS client with token and retries, shared by cloud connectors
+    tree.py          cloud drives as item trees + delta cursors, shared by cloud connectors
+    msauth.py        Microsoft sign-in (M10)
     msgraph.py       OneDrive/SharePoint (M10)
+    gauth.py         Google sign-in (M12)
     gdrive.py        Google Drive (M12)
   cli/main.py        Typer app; every command calls service.py
   api/
@@ -91,8 +96,9 @@ class Connector(Protocol):
     def versions(self, path: str) -> list[RemoteVersion]: ...   # [] if the source keeps no history
     def open_version(self, path: str, version_id: str) -> bytes: ...
     def changes_since(self, cursor: str | None) -> tuple[list[RemoteChange], str]: ...  # delta; local returns full-scan based
-    # From M11 only, and only if the user allowed saving to this root:
-    def save(self, path: str, data: bytes) -> RemoteFile: ...
+    # SavingConnector (M11), only called for roots with Save on:
+    def exists(self, path: str) -> bool: ...
+    def save(self, path: str, data: bytes, *, overwrite: bool = False) -> RemoteFile: ...
 ```
 
 ## Index schema (SQLite, rebuildable)
