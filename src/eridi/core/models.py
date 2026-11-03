@@ -1,0 +1,127 @@
+"""Plain data types shared across the engine.
+
+Record entries mirror `docs/RECORD_FORMAT.md` (schema `eridi.record/1`). Every record type
+keeps the fields it doesn't know in `extra_unknown`, so an entry written by a newer version
+survives being read and written by this one.
+"""
+
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any, Literal
+
+RECORD_SCHEMA = "eridi.record/1"
+
+EntryKind = Literal["note", "decision", "outcome", "link", "project", "tombstone"]
+ENTRY_KINDS: tuple[str, ...] = ("note", "decision", "outcome", "link", "project", "tombstone")
+
+AuthorKind = Literal["human", "agent"]
+AUTHOR_KINDS: tuple[str, ...] = ("human", "agent")
+
+Outcome = Literal["worked", "partial", "failed", "unknown"]
+OUTCOMES: tuple[str, ...] = ("worked", "partial", "failed", "unknown")
+
+LinkRelation = Literal["caused", "replaces", "relates"]
+LINK_RELATIONS: tuple[str, ...] = ("caused", "replaces", "relates")
+
+JSON = dict[str, Any]
+
+
+@dataclass(frozen=True)
+class Author:
+    name: str
+    kind: str = "human"
+    email: str | None = None
+    extra_unknown: JSON = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Subject:
+    """A file an entry is about. `path` is POSIX-style, relative to the root."""
+
+    root_id: str
+    path: str
+    root_label: str | None = None
+    content_sha256: str | None = None
+    text_sha256: str | None = None
+    extra_unknown: JSON = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class EntryChange:
+    """The detected change between two text versions that an entry explains."""
+
+    from_text_sha256: str | None
+    to_text_sha256: str
+    summary: str | None = None
+    extra_unknown: JSON = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Link:
+    """One connection in a `link` entry. `from`/`to` are an entry ID or a subject object."""
+
+    from_: str | JSON
+    to: str | JSON
+    relation: str
+    extra_unknown: JSON = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ProjectRef:
+    """The project a `project` entry creates or renames."""
+
+    id: str
+    name: str
+    home_root_id: str | None = None
+    extra_unknown: JSON = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Entry:
+    id: str
+    kind: str
+    created_at: str
+    author: Author
+    device_id: str
+    text: str = ""
+    subjects: tuple[Subject, ...] = ()
+    project_id: str | None = None
+    change: EntryChange | None = None
+    outcome: str | None = None
+    tags: tuple[str, ...] = ()
+    supersedes: str | None = None
+    target_id: str | None = None
+    links: tuple[Link, ...] | None = None
+    project: ProjectRef | None = None
+    extra: JSON = field(default_factory=dict)
+    schema: str = RECORD_SCHEMA
+    extra_unknown: JSON = field(default_factory=dict)
+
+    @property
+    def created(self) -> datetime:
+        """`created_at` as an aware UTC datetime."""
+        return parse_timestamp(self.created_at)
+
+    @property
+    def is_supported_kind(self) -> bool:
+        return self.kind in ENTRY_KINDS
+
+
+def format_timestamp(moment: datetime) -> str:
+    """UTC ISO 8601 with milliseconds and `Z`, e.g. `2026-11-03T14:05:22.481Z`."""
+    if moment.tzinfo is None:
+        raise ValueError("Timestamps must be timezone-aware.")
+    utc = moment.astimezone(UTC)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
+def parse_timestamp(value: str) -> datetime:
+    """Parse a record timestamp. Raises ValueError unless it is UTC ISO 8601."""
+    if not value.endswith("Z"):
+        raise ValueError(f"{value!r} is not a UTC timestamp ending in 'Z'.")
+    moment = datetime.fromisoformat(value[:-1] + "+00:00")
+    return moment.astimezone(UTC)
+
+
+def utc_now() -> str:
+    return format_timestamp(datetime.now(UTC))

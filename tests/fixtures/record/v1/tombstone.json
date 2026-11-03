@@ -1,0 +1,14 @@
+{
+  "author": {
+    "kind": "human",
+    "name": "J. Lindqvist"
+  },
+  "created_at": "2026-11-12T11:00:00.000Z",
+  "device_id": "dev_01JC8Y0000000000000000000B",
+  "id": "01JCAD0000000000000000000A",
+  "kind": "tombstone",
+  "schema": "eridi.record/1",
+  "subjects": [],
+  "target_id": "01JC9A0000000000000000000A",
+  "text": "Written against the wrong protocol."
+}

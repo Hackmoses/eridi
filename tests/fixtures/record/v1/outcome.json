@@ -1,0 +1,15 @@
+{
+  "author": {
+    "kind": "human",
+    "name": "A. Okafor"
+  },
+  "created_at": "2026-11-10T16:30:00.250Z",
+  "device_id": "dev_01JC8Y0000000000000000000A",
+  "id": "01JCAB0000000000000000000A",
+  "kind": "outcome",
+  "outcome": "worked",
+  "schema": "eridi.record/1",
+  "subjects": [],
+  "target_id": "01JC8Z9K3V5W6X7Y8Z9A0B1C2D",
+  "text": ""
+}

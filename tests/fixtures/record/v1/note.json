@@ -1,0 +1,35 @@
+{
+  "author": {
+    "email": "a.okafor@example.edu",
+    "kind": "human",
+    "name": "A. Okafor"
+  },
+  "change": {
+    "from_text_sha256": "77de0c2a1f0e4b7d9c3a5e6f8b1d2c4a7e9f0b3c5d6e8f1a2b4c6d8e0f1a3b5c",
+    "summary": "Primary antibody incubation: 1 h at RT → 2 h at RT",
+    "to_text_sha256": "41ab9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"
+  },
+  "created_at": "2026-11-03T14:05:22.481Z",
+  "device_id": "dev_01JC8Y0000000000000000000A",
+  "extra": {},
+  "id": "01JC8Z9K3V5W6X7Y8Z9A0B1C2D",
+  "kind": "note",
+  "outcome": "worked",
+  "project_id": "proj_01JC8X0000000000000000000A",
+  "schema": "eridi.record/1",
+  "subjects": [
+    {
+      "content_sha256": "9f2c4e6a8b0d1f3e5a7c9b2d4f6e8a0c1b3d5f7e9a2c4b6d8f0e1a3c5b7d9f2e",
+      "path": "Protocols/Western_blot_blocking_v7.docx",
+      "root_id": "root_01JC8W0000000000000000000A",
+      "root_label": "OneDrive – University",
+      "text_sha256": "41ab9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"
+    }
+  ],
+  "supersedes": null,
+  "tags": [
+    "antibody",
+    "lot-change"
+  ],
+  "text": "Signal was weak with the new antibody lot (#B2291). Longer incubation restored band intensity."
+}
