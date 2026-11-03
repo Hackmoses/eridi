@@ -40,7 +40,7 @@
 ## Module map
 
 ```
-src/rationale/
+src/eridi/
   __init__.py
   core/
     models.py        dataclasses: Root, FileInfo, TextVersion, Change, Entry, Project
@@ -66,7 +66,7 @@ src/rationale/
     scan.py          walk roots via connectors; detect new/changed/removed; extract; snapshot
     snapshots.py     content-addressed gzipped text store; eviction
     changes.py       compute pending changes (changed files with no explaining note); diffs
-    service.py       the engine's public API used by CLI, API and MCP (one class: Rationale)
+    service.py       the engine's public API used by CLI, API and MCP (one class: Eridi)
   connectors/
     base.py          Connector protocol (below)
     local.py         local and synced folders
@@ -110,14 +110,14 @@ projects(id, name, home_root_id)                  -- derived from `project` entr
 project_roots(project_id, root_id, path_prefix)   -- folders that belong to a project
 ```
 
-`rationale index rebuild` must produce the same search results as an incrementally maintained
+`eridi index rebuild` must produce the same search results as an incrementally maintained
 index. A test enforces this.
 
 ## Change detection (v0)
 
 1. Scan walks each root through its connector, respecting ignore rules (`.git`, `node_modules`,
    `~$*` Office temp files, `.DS_Store`, `Thumbs.db`, files over the size limit, and patterns in
-   `.rationaleignore`).
+   `.eridiignore`).
 2. A file is re-examined only if size or modified time changed. Then its bytes are hashed; if
    the hash changed, text is extracted and hashed.
 3. If the text hash differs from the last seen version, the new text is snapshotted and a
@@ -139,7 +139,7 @@ A local web server on a laptop can be called by other programs and by malicious 
 
 ## MCP server
 
-`rationale mcp` runs an MCP server over stdio, so Claude Desktop, Claude Code and other MCP
+`eridi mcp` runs an MCP server over stdio, so Claude Desktop, Claude Code and other MCP
 clients can use the lab's record with no AI cost to the project.
 
 Tools (read-only by default):
@@ -178,4 +178,4 @@ Write tool, only when the user turns on `mcp.allow_writes`:
 
 Apache-2.0 for the code. Contributions accepted under the Developer Certificate of Origin
 (signed-off commits). The name and logo are not covered by the license, so a future
-"Rationale for Teams" or institution edition can be offered without confusion.
+"Eridi for Teams" or institution edition can be offered without confusion.

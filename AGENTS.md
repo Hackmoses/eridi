@@ -5,7 +5,7 @@ AI agent working in this repository. Humans should read it too.
 
 ## What this project is
 
-**Rationale** (working name) is an open-source, local-first research memory for life science
+**Eridi** is an open-source, local-first research memory for life science
 and clinical research labs. It indexes the files a lab already has (local folders, OneDrive,
 Google Drive), lets people search them, detects when protocols and documents change, and
 records **why** things changed and **whether they worked**. That record becomes the lab's own
@@ -17,6 +17,7 @@ Read these before writing code:
 2. `docs/ARCHITECTURE.md` — the structure, module boundaries and key decisions.
 3. `docs/RECORD_FORMAT.md` — the on-disk format of the record. Treat it as a contract.
 4. `docs/PROGRESS.md` — what is done. Update it as you finish tasks.
+5. `docs/LANDSCAPE.md` — nearby products and how Eridi stays different.
 
 ## How to work
 
@@ -71,13 +72,13 @@ uv run pytest -k record      # a subset
 uv run ruff check . --fix    # lint
 uv run ruff format .         # format
 uv run mypy src              # type check
-uv run rationale --help      # the CLI (from milestone M5)
+uv run eridi --help          # the CLI (from milestone M5)
 ```
 
 ## Repository layout
 
 ```
-src/rationale/
+src/eridi/
   core/         engine: models, config, record store, index, scanner, extractors, diffs
   connectors/   one module per storage source (local first)
   cli/          command line (Typer)

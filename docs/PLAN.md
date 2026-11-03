@@ -29,9 +29,9 @@ to the project.
 **Goal:** an empty but working project that builds and tests on macOS, Windows and Linux.
 
 Tasks:
-1. **Scaffold the package** with `uv init --package` → `src/rationale/`, `pyproject.toml`
-   (Python ≥3.12, hatchling), console script `rationale = "rationale.cli.main:app"`.
-   *Test:* `uv run python -c "import rationale"` works; `uv run rationale --help` prints help.
+1. **Scaffold the package** with `uv init --package` → `src/eridi/`, `pyproject.toml`
+   (Python ≥3.12, hatchling), console script `eridi = "eridi.cli.main:app"`.
+   *Test:* `uv run python -c "import eridi"` works; `uv run eridi --help` prints help.
 2. **Tooling:** ruff (lint + format), mypy strict on `src/`, pytest with coverage. Add
    `pre-commit` config running ruff.
    *Test:* the full check from AGENTS.md passes on the empty project.
@@ -43,7 +43,7 @@ Tasks:
    `SECURITY.md` (how to report issues privately), `CODE_OF_CONDUCT.md` (Contributor Covenant),
    issue templates for bug and feature.
 5. **Core helpers:** `core/ids.py` (ULIDs, prefixed IDs), `core/paths.py` (app-data dir via
-   platformdirs, overridable with `RATIONALE_HOME` env var for tests; `to_posix_relative(root, path)`).
+   platformdirs, overridable with `ERIDI_HOME` env var for tests; `to_posix_relative(root, path)`).
    *Tests:* IDs sort by creation time and are unique over 10,000 generations; path
    normalization turns `Protocols\WB\v7.docx` on Windows into `Protocols/WB/v7.docx`; Unicode
    and spaces in names round-trip; paths outside the root raise a clear error.
@@ -69,12 +69,12 @@ Tasks:
    *Tests:* round-trip equality; every required field missing → clear error naming the field;
    unknown fields preserved through round-trip; fixtures in `tests/fixtures/record/v1/` (one per
    kind) parse correctly.
-2. **RecordStore** (`core/record/store.py`): `init(folder)` writes `rationale-record.json`;
+2. **RecordStore** (`core/record/store.py`): `init(folder)` writes `eridi-record.json`;
    `append(entry)` writes atomically into `entries/YYYY/MM/<id>.json` (temp file, fsync, rename);
    `iter_entries()` yields all valid entries sorted by ID; `get(id)`.
    *Tests:* append then read; a crash simulated between temp write and rename leaves no visible
    entry; files named `<ulid> (1).json` or `<ulid>-DESKTOP-X.json` are ignored and reported;
-   invalid JSON is skipped and reported; an entry with schema `rationale.record/2` is skipped
+   invalid JSON is skipped and reported; an entry with schema `eridi.record/2` is skipped
    with a single warning.
 3. **Concurrent writers test:** two `RecordStore` instances (simulating two laptops) append 500
    entries each to the same folder from separate processes. All 1,000 are readable, none lost
@@ -101,7 +101,7 @@ Tasks:
 1. **Connector protocol** (`connectors/base.py`) per ARCHITECTURE.md, plus `RemoteFile` and
    `RemoteVersion` dataclasses.
 2. **Local connector** (`connectors/local.py`): walks a folder, applies ignore rules (defaults
-   plus `.rationaleignore` with gitignore-style patterns via `pathspec`), skips symlinks that
+   plus `.eridiignore` with gitignore-style patterns via `pathspec`), skips symlinks that
    leave the root, returns size/mtime, opens files read-only. `versions()` returns `[]`.
    Detects cloud placeholders where possible: on Windows check
    `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (0x400000) and `FILE_ATTRIBUTE_OFFLINE`; on macOS,
@@ -178,11 +178,11 @@ Tasks:
    `Primary antibody incubation: 1 h at RT → 2 h at RT`); `dismiss(change)`.
    *Tests:* a note with matching `change.to_text_sha256` clears the pending change; dismiss
    persists across restarts; summaries for docx table changes are readable.
-4. **Service layer** (`core/service.py`): a `Rationale` class exposing everything the
+4. **Service layer** (`core/service.py`): an `Eridi` class exposing everything the
    interfaces need: `add_root`, `list_roots`, `scan`, `search`, `pending_changes`, `diff`,
    `add_note`, `add_outcome`, `file_history`, `recent`, `rebuild_index`, `doctor`. CLI, API and MCP
    call only this.
-   *Tests:* an end-to-end test using only `Rationale`: add sample_lab root → scan → edit
+   *Tests:* an end-to-end test using only `Eridi`: add sample_lab root → scan → edit
    protocol → scan → pending change shown → add note → pending gone → search finds the note →
    `file_history` shows both versions and the note.
 
@@ -190,34 +190,34 @@ Tasks:
 
 ### M5. Command line (first usable version)
 
-**Goal:** you can use Rationale on your real lab folders from the terminal.
+**Goal:** you can use Eridi on your real lab folders from the terminal.
 
 Commands (all thin wrappers over `service.py`, friendly output with `rich`):
 ```
-rationale init                         # name, email, choose record folder
-rationale storage add <path> [--label "Lab OneDrive"] [--no-save]
-rationale storage list
-rationale scan
-rationale search "<query>"
-rationale changes                      # pending changes needing a "why"
-rationale diff <file>
-rationale why <file> "<text>" [--outcome worked|partial|failed]
-rationale note "<text>" [--file <file>] [--tag t]
-rationale history <file>
-rationale recent [--limit 20]
-rationale index rebuild
-rationale doctor                       # FTS5, folders reachable, conflict copies, skipped files
+eridi init                         # name, email, choose record folder
+eridi storage add <path> [--label "Lab OneDrive"] [--no-save]
+eridi storage list
+eridi scan
+eridi search "<query>"
+eridi changes                      # pending changes needing a "why"
+eridi diff <file>
+eridi why <file> "<text>" [--outcome worked|partial|failed]
+eridi note "<text>" [--file <file>] [--tag t]
+eridi history <file>
+eridi recent [--limit 20]
+eridi index rebuild
+eridi doctor                       # FTS5, folders reachable, conflict copies, skipped files
 ```
 Tasks:
 1. Implement commands with clear help text and error messages.
-2. `rationale why` with no text opens an interactive prompt showing the diff first.
+2. `eridi why` with no text opens an interactive prompt showing the diff first.
 3. File arguments accept a path, a partial name (with a pick list if several match), or a file ID.
 
 *Tests:* Typer `CliRunner` tests for every command against sample_lab, including error cases
 (no init yet, unknown file, ambiguous name).
 
 **Human check (important):** use the CLI on your real lab folders for a week. Each time a
-protocol changes, run `rationale why`. Keep a short list of friction points.
+protocol changes, run `eridi why`. Keep a short list of friction points.
 **Done when:** you've used it for real for a week and logged friction.
 
 ### M6. MCP server (AI assistants can use the record)
@@ -231,7 +231,7 @@ Tasks:
    entry IDs so answers can cite sources.
 2. Read-only by default; `add_note` only if `mcp.allow_writes = true`, writing
    `author.kind = "agent"`.
-3. `rationale mcp` command; `rationale mcp config` prints a ready-to-paste config snippet for
+3. `eridi mcp` command; `eridi mcp config` prints a ready-to-paste config snippet for
    Claude Desktop and Claude Code.
 4. Docs: `docs/MCP.md` with setup for Claude Desktop, Claude Code and a generic MCP client.
 
@@ -248,7 +248,7 @@ agent-written entries have `author.kind = "agent"`; tool output never exceeds a 
 
 Tasks:
 1. `api/app.py`: FastAPI on `127.0.0.1`, random port, token auth, Host and Origin checks
-   (ARCHITECTURE.md, "Local API security"). `rationale open` starts the server if needed and
+   (ARCHITECTURE.md, "Local API security"). `eridi open` starts the server if needed and
    opens the browser with the one-time token URL.
 2. `api/routes.py`: JSON endpoints for search, changes, diff, add note/outcome, history,
    storage list and toggles, scan now.
@@ -279,7 +279,7 @@ Pass: you both reach for it instead of digging through drives. If not, fix v0 be
 Tasks:
 1. `project` entries in the record (create, rename, set home storage); `project_roots` mapping
    folders (root + path prefix) to projects.
-2. CLI `rationale project new|list|add-folder|show`; UI project sidebar and project page
+2. CLI `eridi project new|list|add-folder|show`; UI project sidebar and project page
    (files from all storage, pending changes, record timeline).
 3. Notes and searches can be scoped to a project; files are auto-assigned to a project by folder.
 
@@ -291,13 +291,13 @@ entry updates views; search scoped to a project excludes others.
 **Goal:** a lab shares one record through its existing shared folder; changes appear quickly.
 
 Tasks:
-1. Shared record folder: `rationale init --join <folder>` joins an existing record folder
+1. Shared record folder: `eridi init --join <folder>` joins an existing record folder
    (e.g., a SharePoint-synced lab folder). Entries from all members appear.
 2. File watcher (`watchdog`) on local roots and the record folder, debounced (5 s); falls back
    to periodic scans if watching fails.
-3. Root markers (`.rationale-root.json`) offered with permission, so the same synced folder at
+3. Root markers (`.eridi-root.json`) offered with permission, so the same synced folder at
    different paths on different computers is recognized as one root.
-4. `rationale doctor` reports conflict copies created by sync tools and entries from newer versions.
+4. `eridi doctor` reports conflict copies created by sync tools and entries from newer versions.
 
 *Tests:* two simulated members writing to one record folder; watcher picks up a new entry file
 within the debounce window; the same root at two different paths resolves to one root ID.
@@ -366,7 +366,7 @@ Tasks:
 
 Tasks:
 1. Outcome entries targeting a file version or an earlier entry; quick outcome buttons in
-   history and changes views; `rationale outcome <file|entry> worked|partial|failed`.
+   history and changes views; `eridi outcome <file|entry> worked|partial|failed`.
 2. Views: "What changed in this project this month", "Everything that failed with this
    protocol", "Open questions" (changes with no outcome after N days, configurable).
 3. Export a project's record as Markdown or CSV (for lab meetings and reports).

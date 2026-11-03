@@ -1,4 +1,4 @@
-# Record format — schema `rationale.record/1`
+# Record format — schema `eridi.record/1`
 
 The record is the product's permanent asset. It must outlive the app, be readable by other
 tools, sync safely through OneDrive / Google Drive / SharePoint, and merge cleanly when several
@@ -7,12 +7,12 @@ people write to it. This document is a contract. Changes follow the versioning r
 ## Location and layout
 
 The user chooses a **record folder**, normally inside a synced cloud folder (for example
-`OneDrive - University/Rationale/` or a lab's shared SharePoint folder). Until they choose one,
+`OneDrive - University/Eridi/` or a lab's shared SharePoint folder). Until they choose one,
 the app uses `<app-data>/record/`.
 
 ```
 <record folder>/
-  rationale-record.json          # folder marker: {"schema": "rationale.recordset/1", "id": "<ulid>", "created_at": "..."}
+  eridi-record.json          # folder marker: {"schema": "eridi.recordset/1", "id": "<ulid>", "created_at": "..."}
   entries/
     2026/
       11/
@@ -30,13 +30,13 @@ the app uses `<app-data>/record/`.
   Readers ignore `.tmp/` and any file not matching `^[0-9A-HJKMNP-TV-Z]{26}\.json$`.
 - Sync tools sometimes create conflict copies such as `<ulid> (1).json` or
   `<ulid>-DESKTOP-ABC.json`. Readers ignore names that don't match the pattern and report them
-  in `rationale doctor`.
+  in `eridi doctor`.
 
 ## Entry fields
 
 ```json
 {
-  "schema": "rationale.record/1",
+  "schema": "eridi.record/1",
   "id": "01JC8Z9K3V5W6X7Y8Z9A0B1C2D",
   "kind": "note",
   "created_at": "2026-11-03T14:05:22.481Z",
@@ -67,7 +67,7 @@ the app uses `<app-data>/record/`.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `schema` | yes | Always `rationale.record/1` for this version. |
+| `schema` | yes | Always `eridi.record/1` for this version. |
 | `id` | yes | ULID, uppercase Crockford base32. Equals the file name stem. |
 | `kind` | yes | `note` (a why/explanation), `decision` (a choice made, with or without a file), `outcome` (a result for an earlier entry or a file version), `link` (connects entries or files), `project` (creates or renames a project), `tombstone` (retracts an entry). |
 | `created_at` | yes | UTC, ISO 8601 with milliseconds and `Z`. |
@@ -96,7 +96,7 @@ A **root** is a connected storage location (a local folder, a OneDrive drive, a 
 Each root has a stable `root_id` stored in a small marker so that the same synced folder is
 recognized on different computers, even at different paths:
 
-- For local and synced folders: `<root>/.rationale-root.json` containing `{"root_id": "...", "label": "..."}`.
+- For local and synced folders: `<root>/.eridi-root.json` containing `{"root_id": "...", "label": "..."}`.
   The app creates this only with the user's permission, since it writes into their folder. If
   not permitted, the root ID is stored only in local config and won't match across machines.
 - For cloud connectors: derived from the provider's drive ID (`ms:<driveId>`, `gd:<driveId>`).
@@ -118,9 +118,9 @@ To show what changed in files that keep no history (plain local files), the app 
 - Read every valid entry file. Sort by `id`.
 - Unknown `kind` → keep it, show it as "Unsupported entry" in views, never drop it.
 - Unknown fields → preserve in memory, ignore in logic.
-- A schema with an unknown **major** version (`rationale.record/2` when the reader only knows 1)
+- A schema with an unknown **major** version (`eridi.record/2` when the reader only knows 1)
   → skip it, and warn once: "Some record entries were written by a newer version. Update to see them."
-- Invalid JSON or missing required fields → skip, and list it in `rationale doctor`.
+- Invalid JSON or missing required fields → skip, and list it in `eridi doctor`.
 
 ## Versioning rules
 

@@ -1,10 +1,13 @@
-# Rationale
+# Eridi
 
-*Working name. Status: planning / pre-alpha.*
+*Status: pre-alpha.*
 
 Every lab knows what it did. Almost none know why.
 
-Rationale is an open-source, local-first research memory for life science and clinical
+**The name.** *Eridi* (eh-REE-dee) is built from two Yoruba words: *ẹ̀rí*, evidence or
+testimony, and *ìdí*, reason or cause. Together: the evidence behind the why.
+
+Eridi is an open-source, local-first research memory for life science and clinical
 research. It searches the protocols, data and documents your lab already keeps on your
 computer, OneDrive and Google Drive; notices when they change; and records **why** they changed
 and **whether it worked**. Your files never leave your storage, and the record stays in
