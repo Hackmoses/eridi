@@ -12,11 +12,12 @@ from eridi.connectors import connector_for
 from eridi.connectors.base import ConnectorError
 from eridi.core.config import Settings
 from eridi.core.index.db import create_schema, drop_all
-from eridi.core.index.files import upsert_root
+from eridi.core.index.files import restore_versions, upsert_root
 from eridi.core.index.ingest import IngestReport, index_root
 from eridi.core.index.records import RecordSyncReport, sync_records
 from eridi.core.models import Root
 from eridi.core.record.store import RecordStore
+from eridi.core.snapshots import SnapshotStore
 
 
 @dataclass
@@ -32,8 +33,10 @@ def rebuild(
     roots: Iterable[Root],
     store: RecordStore | None,
     settings: Settings | None = None,
+    snapshots: SnapshotStore | None = None,
 ) -> RebuildReport:
-    """Drop every table, then index each root with search on, then load the whole record."""
+    """Drop every table, index each root with search on, restore version history from the
+    snapshot log, then load the whole record."""
     settings = settings or Settings()
     report = RebuildReport()
     drop_all(conn)
@@ -50,9 +53,13 @@ def rebuild(
                 connector_for(root, settings),
                 size_limit=settings.size_limit_bytes,
                 read_placeholders=settings.read_online_only_files,
+                snapshots=snapshots,
             )
         except ConnectorError as exc:
             report.unavailable[root.id] = str(exc)
+    if snapshots is not None:
+        with conn:
+            restore_versions(conn, snapshots.read_log())
     if store is not None:
         report.record = sync_records(conn, store, full=True)
     return report

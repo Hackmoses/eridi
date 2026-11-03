@@ -9,7 +9,7 @@ from pathlib import Path
 
 from eridi.core.paths import app_home
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 INDEX_NAME = "index.sqlite"
 
 # Porter stemming so "blocking" finds "block"; diacritics folded so "Farbung" finds "Färbung".
@@ -53,6 +53,13 @@ CREATE TABLE text_versions (
     source TEXT NOT NULL,
     PRIMARY KEY (file_id, text_sha256)
 );
+CREATE TABLE file_moves (
+    file_id INTEGER NOT NULL REFERENCES files (id) ON DELETE CASCADE,
+    from_path TEXT NOT NULL,
+    to_path TEXT NOT NULL,
+    moved_at TEXT NOT NULL
+);
+CREATE INDEX file_moves_file ON file_moves (file_id);
 CREATE VIRTUAL TABLE files_fts USING fts5(path, title, body, tokenize = '{TOKENIZER}');
 CREATE TABLE entries (
     seq INTEGER PRIMARY KEY,

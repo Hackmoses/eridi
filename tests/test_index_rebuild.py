@@ -16,6 +16,7 @@ from eridi.core.index.records import sync_records
 from eridi.core.index.search import search
 from eridi.core.models import Root, Subject
 from eridi.core.record.store import RecordStore
+from eridi.core.snapshots import SnapshotStore
 
 QUERIES = [
     "blocking buffer",
@@ -58,6 +59,13 @@ def snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         "subjects": sorted(tuple(r) for r in conn.execute("SELECT * FROM entry_subjects")),
         "projects": [tuple(r) for r in conn.execute("SELECT * FROM projects ORDER BY id")],
         "roots": [tuple(r) for r in conn.execute("SELECT * FROM roots ORDER BY id")],
+        "versions": sorted(
+            tuple(r)
+            for r in conn.execute(
+                "SELECT f.root_id, f.path, v.text_sha256, v.first_seen, v.source "
+                "FROM text_versions v JOIN files f ON f.id = v.file_id WHERE f.status = 'present'"
+            )
+        ),
     }
 
 
@@ -65,10 +73,11 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     root = Root("root_LAB", "Lab Drive", str(sample_lab.root))
     connector = LocalConnector(sample_lab.root, root.id)
     store = RecordStore.init(tmp_path / "record")
+    snaps = SnapshotStore()
     incremental = open_index(tmp_path / "incremental.sqlite")
 
     # Day 1: first index, a note.
-    index_root(incremental, root, connector, size_limit=SETTINGS.size_limit_bytes)
+    index_root(incremental, root, connector, size_limit=SETTINGS.size_limit_bytes, snapshots=snaps)
     protocol = Subject(root.id, "Protocols/Western_blot_blocking_v7.docx")
     first = entry(
         text="Primary antibody incubation is 1 h because of the old lot.", subjects=[protocol]
@@ -84,7 +93,7 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     (sample_lab.root / "Notes" / "new_notebook_entry.md").write_text(
         "# Notebook\nLot B2291 behaved well.\n", encoding="utf-8"
     )
-    index_root(incremental, root, connector, size_limit=SETTINGS.size_limit_bytes)
+    index_root(incremental, root, connector, size_limit=SETTINGS.size_limit_bytes, snapshots=snaps)
     store.append(
         entry(
             text="Incubation is now overnight at 4 °C; signal restored.",
@@ -99,7 +108,7 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     sync_records(incremental, store)
 
     rebuilt = open_index(tmp_path / "rebuilt.sqlite")
-    report = rebuild(rebuilt, [root], store, SETTINGS)
+    report = rebuild(rebuilt, [root], store, SETTINGS, snaps)
     assert report.unavailable == {}
     assert report.record is not None and report.record.full
 
@@ -110,12 +119,14 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     statuses = dict(incremental.execute("SELECT path, status FROM files").fetchall())
     assert statuses["Analysis/densitometry_analysis.R"] == "missing"
     assert before["search"]["overnight"]  # the comparison isn't vacuous
+    protocol_versions = [v for v in before["versions"] if v[1] == protocol.path]
+    assert len(protocol_versions) == 2  # history survived the rebuild
     assert ("file", "root_LAB:Analysis/densitometry_analysis.R") not in [
         h[:2] for h in before["search"]["GAPDH"]
     ]
 
     # Rebuilding in place, over the existing index, gives the same again.
-    rebuild(incremental, [root], store, SETTINGS)
+    rebuild(incremental, [root], store, SETTINGS, snaps)
     assert snapshot(incremental) == after
     incremental.close()
     rebuilt.close()

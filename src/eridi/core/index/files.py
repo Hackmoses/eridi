@@ -4,6 +4,7 @@ import sqlite3
 from dataclasses import fields, replace
 
 from eridi.core.models import FileInfo, Root, utc_now
+from eridi.core.snapshots import VersionLine, replay
 
 _FILE_COLUMNS = [f.name for f in fields(FileInfo) if f.name != "id"]
 
@@ -142,3 +143,51 @@ def text_versions(conn: sqlite3.Connection, file_id: int) -> list[tuple[str, str
         (file_id,),
     ).fetchall()
     return [(r[0], r[1], r[2]) for r in rows]
+
+
+def file_moves(conn: sqlite3.Connection, file_id: int) -> list[tuple[str, str, str]]:
+    """(from_path, to_path, moved_at) for each move of a file, oldest first."""
+    rows = conn.execute(
+        "SELECT from_path, to_path, moved_at FROM file_moves WHERE file_id = ? "
+        "ORDER BY moved_at, rowid",
+        (file_id,),
+    ).fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
+
+
+def restore_versions(conn: sqlite3.Connection, lines: list[VersionLine]) -> None:
+    """Replace `text_versions` and `file_moves` with what the version log says.
+
+    Used by rebuilds: the log is the durable source, the tables are a cache of it.
+    """
+    versions, moves = replay(lines)
+    ids = {(r[0], r[1]): int(r[2]) for r in conn.execute("SELECT root_id, path, id FROM files")}
+    conn.execute("DELETE FROM text_versions")
+    conn.execute("DELETE FROM file_moves")
+    for (root_id, path), by_sha in versions.items():
+        file_id = ids.get((root_id, path))
+        if file_id is None:
+            continue
+        conn.executemany(
+            "INSERT INTO text_versions (file_id, text_sha256, first_seen, source) "
+            "VALUES (?, ?, ?, ?)",
+            [(file_id, v.text_sha256, v.first_seen, v.source) for v in by_sha.values()],
+        )
+    # Each move belongs to the file where the chain of moves ends.
+    for i, move in enumerate(moves):
+        dest = move.path
+        for later in moves[i + 1 :]:
+            if later.root_id == move.root_id and later.from_path == dest:
+                dest = later.path
+        file_id = ids.get((move.root_id, dest))
+        if file_id is not None:
+            conn.execute(
+                "INSERT INTO file_moves (file_id, from_path, to_path, moved_at) "
+                "VALUES (?, ?, ?, ?)",
+                (file_id, move.from_path, move.path, move.at),
+            )
+    # Current text that the log doesn't know (e.g. a log lost with old app data) still counts.
+    conn.execute(
+        "INSERT OR IGNORE INTO text_versions (file_id, text_sha256, first_seen, source) "
+        "SELECT id, text_sha256, last_seen, 'scan' FROM files WHERE text_sha256 IS NOT NULL"
+    )

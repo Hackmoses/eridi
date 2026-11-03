@@ -13,6 +13,7 @@ from eridi.core.extract import ExtractResult, extension, extract
 from eridi.core.hashing import sha256_bytes, sha256_text
 from eridi.core.index.files import list_files, set_status, upsert_file, upsert_root
 from eridi.core.models import FileInfo, Root, utc_now
+from eridi.core.snapshots import SnapshotStore
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ def index_root(
     *,
     size_limit: int | None,
     read_placeholders: bool = False,
+    snapshots: SnapshotStore | None = None,
 ) -> IngestReport:
     """Index every file in a root, and mark files that are no longer there as missing."""
     report = IngestReport()
@@ -82,6 +84,9 @@ def index_root(
             extract_status=result.status,
             last_seen=now,
         )
+        if snapshots is not None and result.text:
+            snapshots.put(result.text)
+            snapshots.log_version(root.id, remote.path, sha256_text(result.text), now)
         with conn:
             upsert_file(conn, info, result.text)
         report.indexed += 1
