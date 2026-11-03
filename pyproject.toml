@@ -25,6 +25,7 @@ dependencies = [
     "python-docx>=1.1",   # .docx text
     "python-pptx>=1.0",   # .pptx text
     "python-ulid>=3.0",   # sortable IDs that are unique across devices
+    "rich>=13.7",         # readable terminal output (tables, colors); Typer already uses it
     "tomli-w>=1.0",       # writes config.toml (the standard library only reads TOML)
     "typer>=0.12",        # command line
 ]
