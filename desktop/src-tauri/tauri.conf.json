@@ -36,10 +36,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "externalBin": ["binaries/eridi-engine"],
+    "externalBin": [
+      "binaries/eridi-engine"
+    ],
     "createUpdaterArtifacts": false,
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "entitlements": "entitlements.plist",
+      "hardenedRuntime": true
     },
     "windows": {
       "nsis": {
@@ -50,7 +54,9 @@
   "plugins": {
     "updater": {
       "pubkey": "",
-      "endpoints": ["https://github.com/Hackmoses/eridi/releases/latest/download/latest.json"]
+      "endpoints": [
+        "https://github.com/Hackmoses/eridi/releases/latest/download/latest.json"
+      ]
     }
   }
 }

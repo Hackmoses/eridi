@@ -2,6 +2,8 @@
 # MCP server. Build with `uv run python scripts/build_engine.py` (it names the output the
 # way the desktop app expects: eridi-engine-<target triple>[.exe]).
 # ruff: noqa
+import os
+
 from PyInstaller.utils.hooks import (
     collect_data_files,
     collect_dynamic_libs,
@@ -47,6 +49,8 @@ exe = EXE(
     strip=False,
     upx=False,
     runtime_tmpdir=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    # macOS releases: sign every library inside the engine (they are unpacked at start, so
+    # each needs its own signature for notarization). Empty in local and unsigned builds.
+    codesign_identity=os.environ.get("APPLE_SIGNING_IDENTITY") or None,
+    entitlements_file="entitlements.plist" if os.environ.get("APPLE_SIGNING_IDENTITY") else None,
 )

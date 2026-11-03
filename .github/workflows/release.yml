@@ -1,7 +1,8 @@
 name: Release
 
 # Tag vX.Y.Z to build, sign and publish installers. "Run workflow" builds them without
-# publishing (unsigned unless the signing secrets are set), to try a build.
+# publishing, to try a build. Signing steps run only when their secrets are set (see
+# docs/SIGNING.md), so builds without them still work, unsigned.
 on:
   push:
     tags: ["v*"]
@@ -24,6 +25,8 @@ jobs:
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
     env:
       ERIDI_TARGET_TRIPLE: ${{ matrix.target }}
+      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_AZURE: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -32,8 +35,34 @@ jobs:
           enable-cache: true
       - name: Install
         run: uv sync --locked
+      - name: macOS signing certificate
+        if: runner.os == 'macOS' && env.HAS_APPLE == 'true'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p ci "$RUNNER_TEMP/build.keychain"
+          security default-keychain -s "$RUNNER_TEMP/build.keychain"
+          security unlock-keychain -p ci "$RUNNER_TEMP/build.keychain"
+          security import "$RUNNER_TEMP/cert.p12" -k "$RUNNER_TEMP/build.keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$RUNNER_TEMP/build.keychain"
+          rm "$RUNNER_TEMP/cert.p12"
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
       - name: Build the engine (PyInstaller, one file)
         run: uv run python scripts/build_engine.py
+      - name: Sign the engine (Windows, Azure Trusted Signing)
+        if: runner.os == 'Windows' && env.HAS_AZURE == 'true'
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        shell: bash
+        run: |
+          cargo install trusted-signing-cli --locked
+          trusted-signing-cli -e "${{ vars.AZURE_SIGNING_ENDPOINT }}" -a "${{ vars.AZURE_SIGNING_ACCOUNT }}" \
+            -c "${{ vars.AZURE_SIGNING_PROFILE }}" -d Eridi "desktop/src-tauri/binaries/eridi-engine-${{ matrix.target }}.exe"
       - name: Smoke test the packaged engine
         shell: bash
         run: |
@@ -57,6 +86,9 @@ jobs:
           - { os: macos-13, target: x86_64-apple-darwin }
           - { os: windows-latest, target: x86_64-pc-windows-msvc }
           - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    env:
+      HAS_APPLE: ${{ secrets.APPLE_CERTIFICATE != '' }}
+      HAS_AZURE: ${{ secrets.AZURE_CLIENT_SECRET != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -82,12 +114,46 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: desktop/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
       - name: Install the Tauri CLI
         working-directory: desktop
         run: npm ci
+      - name: Windows signing tool
+        if: runner.os == 'Windows' && env.HAS_AZURE == 'true'
+        run: cargo install trusted-signing-cli --locked
+      - name: macOS signing and notarization (Tauri reads these)
+        if: runner.os == 'macOS' && env.HAS_APPLE == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            printf '%s<<ERIDI_EOF\n%s\nERIDI_EOF\n' "$name" "${!name}" >> "$GITHUB_ENV"
+          done
+      - name: Release settings (signing and updates, when configured)
+        shell: bash
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+        run: uv run --no-project python scripts/release_config.py > desktop/release.conf.json
       - name: Build installers
         working-directory: desktop
-        run: npm run tauri build -- --target ${{ matrix.target }}
+        env:
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        run: npm run tauri build -- --target ${{ matrix.target }} --config release.conf.json
       - uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.target }}
