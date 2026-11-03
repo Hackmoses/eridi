@@ -125,3 +125,16 @@ def parse_timestamp(value: str) -> datetime:
 
 def utc_now() -> str:
     return format_timestamp(datetime.now(UTC))
+
+
+@dataclass(frozen=True)
+class Root:
+    """A connected storage location. `location` is a local path or a provider's drive ID."""
+
+    id: str
+    label: str
+    location: str
+    kind: str = "local"
+    search: bool = True
+    save: bool = False
+    is_home_default: bool = False

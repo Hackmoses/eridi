@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "platformdirs>=4.2",  # correct per-OS app-data locations
     "python-ulid>=3.0",   # sortable IDs that are unique across devices
+    "tomli-w>=1.0",       # writes config.toml (the standard library only reads TOML)
     "typer>=0.12",        # command line
 ]
 
