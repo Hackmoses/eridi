@@ -289,3 +289,29 @@ def test_single_word_has_one_tier(conn: sqlite3.Connection) -> None:
     upsert_root(conn, ROOT)
     upsert_file(conn, FileInfo(ROOT.id, "a.md", 1, 1.0, ".md"), "myelin")
     assert [h.match for h in search(conn, "myelin")] == ["all"]
+
+
+def test_snippet_highlights_word_forms_and_phrases() -> None:
+    from eridi.core.index.search import make_snippet
+
+    text = (
+        "Intro. " * 50
+        + "Membranes were blocked in BSA; the blocking buffer was fresh. "
+        + "x " * 80
+    )
+    snip = make_snippet(text, ["blocking", "buffer"], phrase=True)
+    assert f"{HIGHLIGHT_START}blocking buffer{HIGHLIGHT_END}" in snip
+    assert snip.startswith("…") and snip.endswith("…")
+    assert len(snip) < 200
+    loose = make_snippet("Two proteins of myelin.", ["protein", "myelin"])
+    assert f"{HIGHLIGHT_START}proteins{HIGHLIGHT_END}" in loose
+    assert f"{HIGHLIGHT_START}myelin{HIGHLIGHT_END}" in loose
+    assert make_snippet("nothing here", ["myelin"]) == ""
+
+
+def test_accent_free_query_still_shows_a_passage(
+    lab_index: tuple[sqlite3.Connection, RecordStore],
+) -> None:
+    conn, _ = lab_index
+    [hit] = search(conn, "farbeprotokoll")
+    assert "Färbeprotokoll" in hit.plain_snippet

@@ -74,6 +74,75 @@ class SearchHit:
         return self.snippet_with("", "")
 
 
+_WORD_RE = re.compile(r"\w+", re.UNICODE)
+_SUFFIXES = ("ational", "ations", "ation", "ings", "ing", "ions", "ion", "ies", "es", "ed", "s")
+SNIPPET_CHARS = 160
+
+
+def word_stem(word: str) -> str:
+    """A rough stem so a highlight finds other forms: blocking → block, proteins → protein."""
+    w = word.casefold()
+    for suffix in _SUFFIXES:
+        if w.endswith(suffix) and len(w) - len(suffix) >= 4:
+            return w[: -len(suffix)]
+    return w
+
+
+def make_snippet(text: str, words: list[str], phrase: bool = False, *, whole: bool = False) -> str:
+    """A short passage around the best match, with matches wrapped in highlight marks.
+
+    Built here rather than with SQLite's snippet(), which re-reads the whole document and
+    made searches for common words slow on large PDFs. Returns "" if nothing matches.
+    """
+    if not words or not text:
+        return ""
+    stems = sorted({word_stem(w) for w in words}, key=len, reverse=True)
+    term = re.compile(r"\b(?:" + "|".join(re.escape(st) for st in stems) + r")\w*", re.I)
+    hit = None
+    if phrase and len(words) > 1:
+        joined = r"\W+".join(re.escape(word_stem(w)) + r"\w*" for w in words)
+        hit = re.search(r"\b" + joined, text, re.I)
+    if hit is None:
+        best, best_count = None, 0
+        for n, m in enumerate(term.finditer(text)):
+            if n >= 50:
+                break
+            window = text[m.start() : m.start() + SNIPPET_CHARS]
+            count = len({word_stem(x.group(0)) for x in term.finditer(window)})
+            if count > best_count:
+                best, best_count = m, count
+                if count == len(stems):
+                    break
+        hit = best
+    if hit is None:
+        return ""
+    if whole:
+        start, end = 0, len(text)
+    else:
+        start = max(0, hit.start() - SNIPPET_CHARS // 4)
+        end = min(len(text), start + SNIPPET_CHARS)
+        if start > 0:
+            space = text.find(" ", start)
+            start = space + 1 if 0 <= space < hit.start() else start
+        if end < len(text):
+            space = text.rfind(" ", hit.end(), end)
+            end = space if space > hit.end() else end
+    window = text[start:end]
+    if phrase and len(words) > 1 and hit.re.pattern != term.pattern:
+        marked = re.sub(hit.re.pattern, lambda m: HIGHLIGHT_START + m.group(0) + HIGHLIGHT_END,
+                        window, flags=re.I)  # fmt: skip
+    else:
+        marked = term.sub(lambda m: HIGHLIGHT_START + m.group(0) + HIGHLIGHT_END, window)
+    return ("…" if start > 0 else "") + marked + ("…" if end < len(text) else "")
+
+
+def _opening(text: str) -> str:
+    """The start of a text, for matches the highlighter can't place (e.g. accents typed
+    differently): better a passage without marks than none."""
+    cut = text[:SNIPPET_CHARS]
+    return cut + ("…" if len(text) > SNIPPET_CHARS else "")
+
+
 def group_label(hit: SearchHit) -> str:
     """A short heading for a result's group, e.g. "Exact phrase" or "Only “myelin”"."""
     if hit.match == "exact":
@@ -116,7 +185,13 @@ def build_match(query: str, *, any_term: bool = False) -> str | None:
 
 
 def _file_hits(
-    conn: sqlite3.Connection, expr: str, limit: int, project: str | None, how: Match
+    conn: sqlite3.Connection,
+    expr: str,
+    limit: int,
+    project: str | None,
+    how: Match,
+    words: list[str],
+    phrase: bool,
 ) -> list[SearchHit]:
     project_filter = ""
     params: list[object] = [expr]
@@ -128,29 +203,39 @@ def _file_hits(
         )
         params.append(project)
     params.append(limit)
+    # Rank first, then build snippets only for the rows shown: snippet() on every match of a
+    # common word is what made broad searches slow.
     rows = conn.execute(
         f"""
-        SELECT f.root_id, f.path, f.title, r.label AS root_label,
-               bm25(files_fts, 5.0, 10.0, 1.0) AS score,
-               snippet(files_fts, 2, ?, ?, '…', {SNIPPET_TOKENS}) AS body_snip,
-               snippet(files_fts, -1, ?, ?, '…', {SNIPPET_TOKENS}) AS snip
+        WITH top AS (
+            SELECT files_fts.rowid AS id, bm25(files_fts, 5.0, 10.0, 1.0) AS score
+            FROM files_fts
+            JOIN files f ON f.id = files_fts.rowid
+            LEFT JOIN roots r ON r.id = f.root_id
+            WHERE files_fts MATCH ? AND f.status = 'present' AND coalesce(r.search, 1) = 1
+            {project_filter}
+            ORDER BY score LIMIT ?
+        )
+        SELECT f.root_id, f.path, f.title, r.label AS root_label, top.score AS score,
+               files_fts.body AS body
         FROM files_fts
+        JOIN top ON top.id = files_fts.rowid
         JOIN files f ON f.id = files_fts.rowid
         LEFT JOIN roots r ON r.id = f.root_id
-        WHERE files_fts MATCH ? AND f.status = 'present' AND coalesce(r.search, 1) = 1
-        {project_filter}
-        ORDER BY score LIMIT ?
+        WHERE files_fts MATCH ? AND files_fts.rowid IN (SELECT id FROM top)
+        ORDER BY top.score
         """,  # noqa: S608 - only constant SQL fragments are interpolated
-        [HIGHLIGHT_START, HIGHLIGHT_END, HIGHLIGHT_START, HIGHLIGHT_END, *params],
+        [*params, expr],
     ).fetchall()
     return [
         SearchHit(
             kind="file",
             id=f"{r['root_id']}:{r['path']}",
             title=r["title"] or r["path"].rsplit("/", 1)[-1],
-            # Prefer a passage from the text; fall back to wherever the match is.
-            snippet=(r["body_snip"] if HIGHLIGHT_START in (r["body_snip"] or "") else r["snip"])
-            or "",
+            # A passage from the text; if the match is only in the name, the path instead.
+            snippet=make_snippet(r["body"] or "", words, phrase)
+            or make_snippet(r["path"], words, phrase, whole=True)
+            or _opening(r["body"] or ""),
             score=float(r["score"]),
             root_id=r["root_id"],
             root_label=r["root_label"],
@@ -173,19 +258,26 @@ def _entry_hits(
     params: list[object] = [expr, *([project] if project is not None else []), limit]
     rows = conn.execute(
         f"""
-        SELECT e.id, e.kind, e.created_at, e.author_name, e.text,
-               bm25(entries_fts, 1.0, 2.0, 1.0) AS score,
+        WITH top AS (
+            SELECT entries_fts.rowid AS seq, bm25(entries_fts, 1.0, 2.0, 1.0) AS score
+            FROM entries_fts
+            JOIN entries e ON e.seq = entries_fts.rowid
+            WHERE entries_fts MATCH ? {project_filter}
+            ORDER BY score LIMIT ?
+        )
+        SELECT e.id, e.kind, e.created_at, e.author_name, e.text, top.score AS score,
                snippet(entries_fts, -1, ?, ?, '…', {SNIPPET_TOKENS}) AS snip,
                s.root_id, s.path, r.label AS root_label
         FROM entries_fts
+        JOIN top ON top.seq = entries_fts.rowid
         JOIN entries e ON e.seq = entries_fts.rowid
         LEFT JOIN entry_subjects s ON s.rowid = (
             SELECT min(rowid) FROM entry_subjects WHERE entry_id = e.id)
         LEFT JOIN roots r ON r.id = s.root_id
-        WHERE entries_fts MATCH ? {project_filter}
-        ORDER BY score LIMIT ?
+        WHERE entries_fts MATCH ? AND entries_fts.rowid IN (SELECT seq FROM top)
+        ORDER BY top.score
         """,  # noqa: S608 - only constant SQL fragments are interpolated
-        [HIGHLIGHT_START, HIGHLIGHT_END, *params],
+        [*params, HIGHLIGHT_START, HIGHLIGHT_END, expr],
     ).fetchall()
     return [
         SearchHit(
@@ -207,9 +299,14 @@ def _entry_hits(
 
 
 def _ranked(
-    conn: sqlite3.Connection, expr: str, limit: int, project: str | None, how: Match
+    conn: sqlite3.Connection,
+    expr: str,
+    limit: int,
+    project: str | None,
+    how: Match,
+    words: list[str],
 ) -> list[SearchHit]:
-    hits = _file_hits(conn, expr, limit, project, how) + _entry_hits(
+    hits = _file_hits(conn, expr, limit, project, how, words, how == "exact") + _entry_hits(
         conn, expr, limit, project, how
     )
     hits.sort(key=lambda h: (h.score, h.kind != "entry", h.id))
@@ -269,10 +366,12 @@ def search(
         return []
     hits: list[SearchHit] = []
     seen: set[tuple[str, str]] = set()
+    words = [w for text, _ in parse_query(query) for w in _WORD_RE.findall(text)]
     for how, expr, term in match_tiers(conn, query):
         if len(hits) >= limit:
             break
-        for hit in _ranked(conn, expr, limit, project, how):
+        tier_words = _WORD_RE.findall(term) if term else words
+        for hit in _ranked(conn, expr, limit, project, how, tier_words):
             key = (hit.kind, hit.id)
             if key in seen:
                 continue
