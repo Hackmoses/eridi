@@ -159,16 +159,17 @@ def create_schema(conn: sqlite3.Connection) -> None:
         )
 
 
-def open_index(path: Path | None = None) -> sqlite3.Connection:
+def open_index(path: Path | None = None, *, threads: bool = False) -> sqlite3.Connection:
     """Open (creating or rebuilding as needed) the index database.
 
     `path=None` uses `<app-data>/index.sqlite`; pass `Path(":memory:")` for a throwaway index.
+    `threads=True` allows use from several threads; the caller must serialize access.
     """
     check_fts5()
     path = path or index_path()
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, check_same_thread=not threads)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode = WAL")
@@ -184,7 +185,7 @@ def open_index(path: Path | None = None) -> sqlite3.Connection:
             # A damaged index file: it's disposable, so start a fresh one.
             for suffix in ("", "-wal", "-shm"):
                 Path(f"{path}{suffix}").unlink(missing_ok=True)
-            return open_index(path)
+            return open_index(path, threads=threads)
         raise
     return conn
 

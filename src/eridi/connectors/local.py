@@ -208,3 +208,31 @@ class LocalConnector:
             if since is None or f.modified > since
         ]
         return changes, repr(started)
+
+
+def read_root_marker(folder: Path) -> tuple[str, str] | None:
+    """(root_id, label) from a folder's `.eridi-root.json`, if it has a valid one."""
+    import json
+
+    try:
+        data = json.loads((folder / ROOT_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(data, dict) and isinstance(data.get("root_id"), str):
+        label = data.get("label")
+        return data["root_id"], label if isinstance(label, str) else folder.name
+    return None
+
+
+def write_root_marker(folder: Path, root_id: str, label: str) -> None:
+    """Write `.eridi-root.json` so the same synced folder is recognized on other computers.
+
+    This is the one file Eridi ever writes into a storage folder, and only when the user
+    asked for it.
+    """
+    import json
+
+    from eridi.core.fsutil import atomic_write_bytes
+
+    body = json.dumps({"root_id": root_id, "label": label}, ensure_ascii=False, indent=2) + "\n"
+    atomic_write_bytes(folder / ROOT_MARKER, body.encode("utf-8"), overwrite=False)

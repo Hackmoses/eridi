@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from eridi.connectors import connector_for
-from eridi.connectors.base import ConnectorError
+from eridi.connectors.base import Connector, ConnectorError
 from eridi.core.config import Settings
 from eridi.core.index.db import create_schema, drop_all
 from eridi.core.index.files import restore_versions, upsert_root
@@ -34,6 +34,7 @@ def rebuild(
     store: RecordStore | None,
     snapshots: SnapshotStore,
     settings: Settings | None = None,
+    connectors: dict[str, Connector] | None = None,
 ) -> RebuildReport:
     """Drop every table, index each root with search on, restore version history from the
     snapshot log, then load the whole record."""
@@ -47,7 +48,7 @@ def rebuild(
                 upsert_root(conn, root)
             continue
         try:
-            connector = connector_for(root, settings)
+            connector = (connectors or {}).get(root.id) or connector_for(root, settings)
         except ConnectorError as exc:
             report.unavailable[root.id] = str(exc)
             with conn:
