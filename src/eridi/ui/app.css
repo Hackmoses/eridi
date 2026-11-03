@@ -249,3 +249,4 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .saves .uploaded .state { color: var(--add-fg); }
 .saves .needs_confirmation .state, .saves .blocked .state { color: var(--del-fg); }
 .saves .actions { margin-top: .25rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+.switch.flag { color: var(--del-fg); font-weight: 600; }

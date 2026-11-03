@@ -46,7 +46,9 @@ def test_fixture_per_kind_parses(name: str) -> None:
     assert entry.is_supported_kind
 
 
-@pytest.mark.parametrize("name", [*KIND_FIXTURES, "unknown_fields", "project_folders"])
+@pytest.mark.parametrize(
+    "name", [*KIND_FIXTURES, "unknown_fields", "project_folders", "project_labels"]
+)
 def test_round_trip(name: str) -> None:
     entry = parse_entry(load(name))
     again = parse_entry(json.loads(serialize_entry(entry)))
@@ -205,6 +207,15 @@ def test_project_folders_fixture() -> None:
     # The older project fixture has no folder list: "not stated", not "none".
     older = parse_entry(load("project"))
     assert older.project is not None and older.project.folders is None
+
+
+def test_project_labels_fixture() -> None:
+    entry = parse_entry(load("project_labels"))
+    assert entry.project is not None and entry.project.labels == ("patient-data",)
+    assert entry.project.folders is None  # labels and folders are independent
+    for older in ("project", "project_folders"):  # entries before M11: labels not stated
+        project = parse_entry(load(older)).project
+        assert project is not None and project.labels is None
 
 
 @pytest.mark.parametrize(

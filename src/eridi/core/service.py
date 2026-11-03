@@ -62,6 +62,7 @@ from eridi.core.index.rebuild import RebuildReport, rebuild
 from eridi.core.index.records import RecordSyncReport, sync_records
 from eridi.core.index.search import SearchHit, search
 from eridi.core.models import (
+    DATA_LABELS,
     OUTCOMES,
     Author,
     Entry,
@@ -450,8 +451,10 @@ class Eridi:
 
     def update_root(
         self, root_id: str, *, label: str | None = None, search: bool | None = None,
-        save: bool | None = None,
+        save: bool | None = None, approved_labels: Iterable[str] | None = None,
     ) -> Root:  # fmt: skip
+        """Change a storage's settings. `approved_labels` says which data-safety labels it
+        is approved for (kept on this computer, like the rest of the storage settings)."""
         with self._lock:
             root = self.get_root(root_id)
             if save and not root.save and root.kind == "msgraph":
@@ -464,6 +467,9 @@ class Eridi:
                 label=label if label is not None else root.label,
                 search=search if search is not None else root.search,
                 save=save if save is not None else root.save,
+                approved_labels=root.approved_labels
+                if approved_labels is None
+                else tuple(dict.fromkeys(_label(x) for x in approved_labels)),
             )
             self._save(self._config.with_root(root))
             with self.conn:
@@ -697,6 +703,23 @@ class Eridi:
                 f"Saving to {root.label!r} is off. Turn it on with "
                 f"`eridi storage set {root.label!r} --save` (or on the Storage page)."
             )
+        missing = [x for x in (project.labels if project else ()) if x not in root.approved_labels]
+        if project is not None and missing:
+            what = " and ".join(DATA_LABELS.get(x, x).lower() for x in missing)
+            raise SaveRefusedError(
+                f"{project.name!r} {what}, and {root.label!r} isn't approved for that. Save "
+                "to storage approved for it, or, if your data-safety rules allow, approve this "
+                f"one: `eridi storage set {root.label!r} --approve {missing[0]}`."
+            )
+
+    def set_project_labels(self, ref: str, labels: Iterable[str]) -> Project:
+        """Set a project's data-safety labels (e.g. "patient-data"), shared through the record."""
+        self._require_init()
+        clean = tuple(dict.fromkeys(_label(x) for x in labels))
+        with self._lock:
+            self._refresh_records(force=True)
+            project = self._get_project(ref)
+            return self._write_project(replace(project, labels=clean))
 
     def save_file(
         self,
@@ -870,7 +893,9 @@ class Eridi:
         return None if ref is None else self._get_project(ref).id
 
     def _write_project(self, project: Project, text: str = "") -> Project:
-        ref = ProjectRef(project.id, project.name, project.home_root_id, project.folders)
+        ref = ProjectRef(
+            project.id, project.name, project.home_root_id, project.folders, project.labels
+        )
         entry = make_entry(
             "project", self._author("human", None), self._config.device_id, text,
             project=ref, project_id=project.id,
@@ -1584,6 +1609,18 @@ class Eridi:
                 f"{used / 2**20:.1f} MB of {cap / 2**20:.0f} MB used.",
             )  # fmt: skip
         return report
+
+
+def _label(value: str) -> str:
+    import re
+
+    label = value.strip().lower().replace(" ", "-")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", label):
+        known = ", ".join(DATA_LABELS)
+        raise EridiError(
+            f"{value!r} isn't a data label. Use lowercase words and dashes, e.g. {known}."
+        )
+    return label
 
 
 def _same_bytes(connector: Connector, path: str, job: OutboxJob) -> bool:

@@ -94,6 +94,12 @@ Kind-specific fields:
   entries about them. A `project` entry without `folders` keeps the folders of the project's
   previous entry (so entries written before M8 never clear them). Fixture:
   `tests/fixtures/record/v1/project_folders.json`.
+  Optional (added in M11, within `/1`): `project.labels: ["patient-data"]`, the project's
+  complete list of data-safety labels as of that entry (lowercase words and dashes; known
+  label: `patient-data`, "contains patient data"). Files of a labeled project can be saved
+  through Eridi only to storage approved for every label (approval is a per-computer storage
+  setting, not part of the record). A `project` entry without `labels` keeps the previous
+  entry's labels. Fixture: `tests/fixtures/record/v1/project_labels.json`.
 - `tombstone` entries set `target_id`. Views hide the target; history shows that it was retracted and by whom.
 
 ## Roots

@@ -149,7 +149,8 @@ def diff_json(d: FileDiff) -> dict[str, Any]:
 
 def root_json(r: Root, marked: bool | None = None) -> dict[str, Any]:
     return {"id": r.id, "label": r.label, "location": r.location, "kind": r.kind,
-            "search": r.search, "save": r.save, "marked": marked}  # fmt: skip
+            "search": r.search, "save": r.save, "marked": marked,
+            "approved_labels": list(r.approved_labels)}  # fmt: skip
 
 
 def _marked(eridi: Eridi, r: Root) -> bool:
@@ -162,6 +163,7 @@ def project_json(eridi: Eridi, p: Project) -> dict[str, Any]:
         "name": p.name,
         "home_storage_id": p.home_root_id,
         "home_storage": eridi.root_label(p.home_root_id) if p.home_root_id else None,
+        "labels": list(p.labels),
         "folders": [
             {
                 "ref": f"{f.root_id}:{f.path}",
@@ -223,6 +225,7 @@ class ProjectIn(BaseModel):
 class ProjectUpdateIn(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     home_storage_id: str | None = None
+    labels: list[str] | None = Field(default=None, max_length=20)
 
 
 class FolderIn(BaseModel):
@@ -247,6 +250,7 @@ class StorageIn(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=200)
     search: bool | None = None
     save: bool | None = None
+    approved_labels: list[str] | None = Field(default=None, max_length=20)
 
 
 # --- endpoints ---
@@ -413,8 +417,9 @@ def storage(request: Request) -> Any:
 def update_storage(request: Request, root_id: str, body: StorageIn) -> Any:
     try:
         root = _eridi(request).update_root(
-            root_id, label=body.label, search=body.search, save=body.save
-        )
+            root_id, label=body.label, search=body.search, save=body.save,
+            approved_labels=body.approved_labels,
+        )  # fmt: skip
     except SaveApprovalNeededError as exc:
         return JSONResponse({"error": str(exc), "needs_write_access": True}, status_code=400)
     except KNOWN_ERRORS as exc:
@@ -467,6 +472,8 @@ def update_project(request: Request, project_id: str, body: ProjectUpdateIn) -> 
             p = eridi.rename_project(p.id, body.name)
         if "home_storage_id" in body.model_fields_set and body.home_storage_id != p.home_root_id:
             p = eridi.set_project_home(p.id, body.home_storage_id)
+        if body.labels is not None and tuple(body.labels) != p.labels:
+            p = eridi.set_project_labels(p.id, body.labels)
     except KNOWN_ERRORS as exc:
         return error(exc)
     return project_json(eridi, p)

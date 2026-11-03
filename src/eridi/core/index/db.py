@@ -9,7 +9,7 @@ from pathlib import Path
 
 from eridi.core.paths import app_home
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 INDEX_NAME = "index.sqlite"
 
 # Porter stemming so "blocking" finds "block"; diacritics folded so "Farbung" finds "Färbung".
@@ -91,7 +91,8 @@ CREATE VIRTUAL TABLE entries_fts USING fts5(text, tags, summary, tokenize = '{TO
 CREATE TABLE projects (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    home_root_id TEXT
+    home_root_id TEXT,
+    labels TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE cloud_items (
     root_id TEXT NOT NULL,

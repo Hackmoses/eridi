@@ -44,8 +44,13 @@ def list_projects(conn: sqlite3.Connection) -> list[Project]:
         "ORDER BY project_id, root_id, path_prefix"
     ):
         folders.setdefault(r[0], []).append(ProjectFolder(r[1], r[2]))
-    rows = conn.execute("SELECT id, name, home_root_id FROM projects").fetchall()
-    projects = [Project(r[0], r[1], r[2], tuple(folders.get(r[0], ()))) for r in rows]
+    rows = conn.execute("SELECT id, name, home_root_id, labels FROM projects").fetchall()
+    projects = [
+        Project(
+            r[0], r[1], r[2], tuple(folders.get(r[0], ())), tuple(filter(None, r[3].split(",")))
+        )
+        for r in rows
+    ]
     return sorted(projects, key=lambda p: (p.name.casefold(), p.id))
 
 

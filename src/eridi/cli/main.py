@@ -27,7 +27,7 @@ from eridi.core.changes import Activity, FileDiff, FileStats
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit, group_label, parse_query
-from eridi.core.models import OUTCOMES, Entry, FileInfo, Project, parse_timestamp
+from eridi.core.models import DATA_LABELS, OUTCOMES, Entry, FileInfo, Project, parse_timestamp
 from eridi.core.outbox import OutboxJob
 from eridi.core.record.store import RecordFolderError
 from eridi.core.scan import ScanProgress, ScanReport
@@ -368,7 +368,19 @@ def storage_list() -> None:
             where = "Microsoft" if r.kind == "msgraph" else r.location
             out.print(f"[bold]{escape(r.label)}[/bold]  {escape(where)}")
             marked = " · marked" if eridi.root_marker(r.id) == r.id else ""
-            out.print(f"  [dim]{search} · {save}{marked} · {r.id}[/dim]")
+            approved = approved_text(r.approved_labels)
+            out.print(f"  [dim]{search} · {save}{marked}{approved} · {r.id}[/dim]")
+
+
+def label_text(label: str) -> str:
+    return DATA_LABELS.get(label, label).lower()
+
+
+def approved_text(labels: tuple[str, ...]) -> str:
+    if not labels:
+        return ""
+    names = ", ".join(DATA_LABELS.get(x, x).removeprefix("Contains ") for x in labels)
+    return f" · approved for {names}"
 
 
 @storage_app.command("add-microsoft")
@@ -459,15 +471,29 @@ def storage_set(
         bool | None,
         typer.Option("--save/--no-save", help="Allow saving files here through Eridi."),
     ] = None,
+    approve: Annotated[
+        list[str] | None,
+        typer.Option(help="Approve it for a data label, e.g. patient-data. Repeat for more."),
+    ] = None,
+    unapprove: Annotated[
+        list[str] | None, typer.Option(help="Withdraw approval for a data label.")
+    ] = None,
     device_code: Annotated[
         bool, typer.Option(help="For Microsoft: approve saving with a code, not a browser here.")
     ] = False,
 ) -> None:
-    """Change a storage's name, or turn Search or Save on or off."""
+    """Change a storage's name, turn Search or Save on or off, or approve it for data labels."""
     with session() as eridi:
         root_id = storage_id(eridi, storage)
+        labels = None
+        if approve or unapprove:
+            current = eridi.get_root(root_id).approved_labels
+            dropped = {x.strip().lower() for x in unapprove or []}
+            labels = [x for x in (*current, *(approve or [])) if x.strip().lower() not in dropped]
         try:
-            root = eridi.update_root(root_id, label=label, search=search, save=save)
+            root = eridi.update_root(
+                root_id, label=label, search=search, save=save, approved_labels=labels
+            )
         except SaveApprovalNeededError:
             out = console()
             out.print("Saving to Microsoft needs your permission for Eridi to write there.")
@@ -475,8 +501,11 @@ def storage_set(
             eridi.allow_microsoft_saving(
                 root_id, device_code=device_code, show=lambda m: out.print(escape(m))
             )
-            root = eridi.update_root(root_id, label=label, search=search, save=save)
+            root = eridi.update_root(
+                root_id, label=label, search=search, save=save, approved_labels=labels
+            )
         state = f"search {'on' if root.search else 'off'} · save {'on' if root.save else 'off'}"
+        state += approved_text(root.approved_labels)
         console().print(f"[bold]{escape(root.label)}[/bold]  [dim]{state}[/dim]")
 
 
@@ -507,6 +536,8 @@ def print_project(eridi: Eridi, project: Project) -> None:
     if project.home_root_id:
         home = eridi.root_label(project.home_root_id) or project.home_root_id
         out.print(f"  [dim]Saves to {escape(home)}[/dim]")
+    for label in project.labels:
+        out.print(f"  [yellow]{escape(label_text(label).capitalize())}[/yellow]")
 
 
 FOLDER_HELP = "A folder path, a storage name (all of it), or <storage ID>:<folder>."
@@ -579,6 +610,21 @@ def project_home(
     """Set the storage new files for this project are saved to."""
     with session() as eridi:
         print_project(eridi, eridi.set_project_home(project, storage_id(eridi, storage)))
+
+
+@project_app.command("label")
+def project_label(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    label: Annotated[str, typer.Argument(help="A data label, e.g. patient-data.")],
+    remove: Annotated[bool, typer.Option(help="Take the label off.")] = False,
+) -> None:
+    """Mark a project's data, e.g. "contains patient data". Its files can then be saved only
+    to storage approved for that label. Labels are shared with the lab through the record."""
+    with session() as eridi:
+        current = eridi.get_project(project)
+        wanted = label.strip().lower()
+        labels = [x for x in current.labels if x != wanted] if remove else [*current.labels, wanted]
+        print_project(eridi, eridi.set_project_labels(current.id, labels))
 
 
 @project_app.command("show")

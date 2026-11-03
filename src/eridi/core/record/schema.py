@@ -203,12 +203,19 @@ def _parse_project(value: Any) -> ProjectRef:
             _parse_project_folder(item, f"project.folders[{i}]")
             for i, item in enumerate(_parse_list(data["folders"], "project.folders"))
         )
+    labels = None
+    if data.get("labels") is not None:
+        labels = tuple(
+            _string(item, f"project.labels[{i}]", allow_empty=False).lower()
+            for i, item in enumerate(_parse_list(data["labels"], "project.labels"))
+        )
     return ProjectRef(
         id=_string(_require(data, "id", "project."), "project.id", allow_empty=False),
         name=_string(_require(data, "name", "project."), "project.name", allow_empty=False),
         home_root_id=_optional_string(data.get("home_root_id"), "project.home_root_id"),
         folders=folders,
-        extra_unknown=_unknown(data, {"id", "name", "home_root_id", "folders"}),
+        labels=labels,
+        extra_unknown=_unknown(data, {"id", "name", "home_root_id", "folders", "labels"}),
     )
 
 
@@ -368,6 +375,8 @@ def entry_to_dict(entry: Entry) -> JSON:
                 _with_unknown({"root_id": f.root_id, "path": f.path}, f.extra_unknown)
                 for f in p.folders
             ]
+        if p.labels is not None:
+            project["labels"] = list(p.labels)
         out["project"] = _with_unknown(project, p.extra_unknown)
     return _with_unknown(out, entry.extra_unknown)
 

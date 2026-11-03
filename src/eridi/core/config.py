@@ -157,8 +157,15 @@ def _parse(path: Path, data: dict[str, Any]) -> Config:
         for f in fields(Root):
             if f.name in item:
                 kind = type(getattr(root_defaults, f.name))
+                key = f"{where}.{f.name}"
+                if kind is tuple:
+                    values_list = _typed(path, key, item[f.name], list, "a list of text")
+                    for j, value in enumerate(values_list):
+                        _typed(path, f"{key}[{j}]", value, str, "text")
+                    root_values[f.name] = tuple(values_list)
+                    continue
                 label = "true or false" if kind is bool else "text"
-                root_values[f.name] = _typed(path, f"{where}.{f.name}", item[f.name], kind, label)
+                root_values[f.name] = _typed(path, key, item[f.name], kind, label)
         roots.append(Root(**root_values))
     ids = [r.id for r in roots]
     if len(ids) != len(set(ids)):
@@ -219,10 +226,16 @@ def _to_toml(config: Config) -> dict[str, Any]:
         user["email"] = config.user.email
     data["user"] = user
     data["settings"] = {f.name: getattr(config.settings, f.name) for f in fields(Settings)}
-    data["roots"] = [{f.name: getattr(r, f.name) for f in fields(Root)} for r in config.roots]
+    data["roots"] = [
+        {f.name: _plain(getattr(r, f.name)) for f in fields(Root)} for r in config.roots
+    ]
     data["dismissed_changes"] = list(config.dismissed_changes)
     data["mcp"] = {**data.get("mcp", {}), "allow_writes": config.mcp_allow_writes}
     return data
+
+
+def _plain(value: Any) -> Any:
+    return list(value) if isinstance(value, tuple) else value
 
 
 def save_config(config: Config, path: Path | None = None) -> Path:

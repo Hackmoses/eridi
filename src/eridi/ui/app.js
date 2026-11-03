@@ -3,6 +3,7 @@
 "use strict";
 
 const OUTCOMES = ["worked", "partial", "failed", "unknown"];
+const PATIENT_DATA = "patient-data";
 const main = document.getElementById("main");
 
 // --- helpers ---
@@ -413,10 +414,19 @@ async function renderStorage() {
           try { await api("/storage/" + encodeURIComponent(root.id) + "/mark", { method: "POST" }); renderStorage(); }
           catch (error) { alert(error.message); }
         } }, "Mark for other computers") : null;
+      const approvedId = `approved-${i}`;
+      const approved = el("input", { type: "checkbox", id: approvedId,
+        checked: root.approved_labels.includes(PATIENT_DATA), onchange: async () => {
+          const labels = root.approved_labels.filter((x) => x !== PATIENT_DATA);
+          if (approved.checked) labels.push(PATIENT_DATA);
+          try { Object.assign(root, await api("/storage/" + encodeURIComponent(root.id), { method: "PATCH", body: { approved_labels: labels } })); }
+          catch (error) { approved.checked = !approved.checked; alert(error.message); }
+        } });
       return el("li", { class: "card" },
         el("h2", {}, root.label),
         el("div", { class: "meta" }, root.kind === "msgraph" ? "Microsoft" : root.location),
-        el("div", { class: "actions" }, toggle("search", "Search"), toggle("save", "Save"), mark));
+        el("div", { class: "actions" }, toggle("search", "Search"), toggle("save", "Save"),
+          el("label", { for: approvedId, class: "switch" }, approved, " Approved for patient data"), mark));
     })));
   } catch (error) { showError(list, error); }
 }
@@ -465,7 +475,16 @@ async function renderProject(params) {
     e.preventDefault();
     try { await api(base, { method: "PATCH", body: { name: name.value } }); again(); } catch (error) { fail(error); }
   } }, name, el("button", { type: "submit" }, "Rename"));
+  const sensitive = el("input", { type: "checkbox", id: "project-patient-data",
+    checked: p.labels.includes(PATIENT_DATA), onchange: async () => {
+      const labels = p.labels.filter((x) => x !== PATIENT_DATA);
+      if (sensitive.checked) labels.push(PATIENT_DATA);
+      try { await api(base, { method: "PATCH", body: { labels } }); again(); }
+      catch (error) { sensitive.checked = !sensitive.checked; fail(error); }
+    } });
   const heading = el("div", { class: "heading" }, el("h1", {}, p.name),
+    el("label", { for: "project-patient-data", class: "switch" + (sensitive.checked ? " flag" : "") },
+      sensitive, " Contains patient data"),
     el("button", { type: "button", class: "link", onclick: () => {
       heading.hidden = true; renameForm.hidden = false; name.focus(); name.select();
     } }, "Rename"));

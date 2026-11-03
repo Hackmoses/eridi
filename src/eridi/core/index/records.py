@@ -114,6 +114,10 @@ def _refresh_states(conn: sqlite3.Connection, new_ids: set[str]) -> None:
                 "home_root_id = excluded.home_root_id",
                 (p.id, p.name, p.home_root_id),
             )
+            if p.labels is not None:  # an entry that doesn't list labels keeps them
+                conn.execute(
+                    "UPDATE projects SET labels = ? WHERE id = ?", (",".join(p.labels), p.id)
+                )
             if p.folders is not None:  # an entry that doesn't list folders keeps them
                 folders[p.id] = p.folders
     conn.executemany(

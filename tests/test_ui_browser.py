@@ -143,3 +143,34 @@ def test_project_sidebar_and_page(browser: Any, sample_lab: SampleLab, tmp_path:
             page.get_by_role("button", name="Save").click()
             page.wait_for_selector(".timeline >> text=Plan: validate the new lot first.")
             assert errors == []
+
+
+def test_save_a_file_into_a_project(browser: Any, sample_lab: SampleLab, tmp_path: Path) -> None:
+    """M11: save a file from the project page; a patient-data label refuses unapproved storage."""
+    upload = tmp_path / "gel_2026-11-03.txt"
+    upload.write_text("Lane 3: strong band at 42 kDa.\n", encoding="utf-8")
+    with Eridi() as eridi:
+        eridi.init("A. Okafor", None, tmp_path / "record")
+        root = eridi.add_root(sample_lab.root, "Lab Drive", save=True)
+        eridi.create_project("Western blots", home_root_id=root.id,
+                             folders=[f"{root.id}:Protocols"])  # fmt: skip
+        eridi.scan()
+        with live_server(eridi) as (port, guard):
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(f"http://127.0.0.1:{port}/?t={guard.new_link()}")
+            page.get_by_role("link", name="Western blots").click()
+            page.wait_for_selector("h1:has-text('Western blots')")
+            page.get_by_label("Files to save").set_input_files(str(upload))
+            page.get_by_role("button", name="Save to Lab Drive").click()
+            page.wait_for_selector(".saves .uploaded", timeout=20_000)
+            assert "Protocols/gel_2026-11-03.txt" in page.inner_text(".saves")
+            assert (sample_lab.root / "Protocols" / upload.name).exists()
+
+            page.get_by_label("Contains patient data").check()
+            page.wait_for_selector(".switch.flag")
+            page.get_by_label("Files to save").set_input_files(str(upload))
+            page.get_by_role("button", name="Save to Lab Drive").click()
+            page.wait_for_selector("text=isn't approved")
+            assert errors == []

@@ -92,6 +92,8 @@ class ProjectRef:
     name: str
     home_root_id: str | None = None
     folders: tuple[ProjectFolder, ...] | None = None
+    labels: tuple[str, ...] | None = None
+    """Data-safety labels (e.g. "patient-data"); `None` keeps the previous entry's."""
     extra_unknown: JSON = field(default_factory=dict)
 
 
@@ -146,6 +148,11 @@ def utc_now() -> str:
     return format_timestamp(datetime.now(UTC))
 
 
+DATA_LABELS: dict[str, str] = {"patient-data": "Contains patient data"}
+"""Data-safety labels a project can carry. Saving a labeled project's files is allowed only
+to storage approved for every one of its labels."""
+
+
 @dataclass(frozen=True)
 class Root:
     """A connected storage location. `location` is a local path or a provider's drive ID."""
@@ -159,6 +166,8 @@ class Root:
     is_home_default: bool = False
     account: str = ""
     """For cloud storage: the signed-in account it is read with (empty for local folders)."""
+    approved_labels: tuple[str, ...] = ()
+    """Data-safety labels this storage is approved for (e.g. "patient-data")."""
 
 
 @dataclass(frozen=True)
@@ -189,3 +198,4 @@ class Project:
     name: str
     home_root_id: str | None = None
     folders: tuple[ProjectFolder, ...] = ()
+    labels: tuple[str, ...] = ()
