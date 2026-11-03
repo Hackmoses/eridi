@@ -808,6 +808,7 @@ class Eridi:
                 "online_only": "online-only (make them available offline to search their text)",
                 "needs_ocr": "scans without a text layer",
                 "error": "could not be read",
+                "pending": "not read yet (a scan was stopped; run `eridi scan` to finish)",
             }
             for status, words in explain.items():
                 if counts.get(status):

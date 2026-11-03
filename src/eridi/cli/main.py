@@ -96,8 +96,8 @@ def scan_progress() -> Iterator[Callable[[ScanProgress], None]]:
             total = p.total or 0
             eta = ""
             elapsed = time.monotonic() - started
-            if p.done >= 20 and total > p.done:
-                left = elapsed / p.done * (total - p.done)
+            if elapsed > 5 and p.bytes_done and p.bytes_total > p.bytes_done:
+                left = elapsed / p.bytes_done * (p.bytes_total - p.bytes_done)
                 eta = f" · about {format_duration(left)} left"
             status.update(f"Reading {label}: {p.done:,} of {total:,}{eta} · {escape(name)}")
 
@@ -314,6 +314,10 @@ def scan() -> None:
             out.print(f"[bold]{label}[/bold]: {', '.join(parts)}.")
             for path, reason in report.errors:
                 out.print(f"  [yellow]Could not read[/yellow] {escape(path)}: {escape(reason)}")
+            if report.slow:
+                out.print("  Slowest files to read:")
+                for path, seconds in report.slow[:5]:
+                    out.print(f"    {format_duration(seconds)}  {escape(path)}")
         pending = len(eridi.pending_changes())
         if pending:
             noun = "change needs" if pending == 1 else "changes need"

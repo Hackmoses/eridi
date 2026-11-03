@@ -19,6 +19,7 @@ import multiprocessing
 import os
 import pickle
 import sqlite3
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
@@ -38,6 +39,10 @@ COMMIT_EVERY = 50
 PARALLEL_MIN_FILES = 32
 """Below this many files to read, worker processes cost more than they save."""
 MAX_WORKERS = 16
+SLOW_SECONDS = 5.0
+"""Files taking longer than this to read are listed in the scan report."""
+PENDING = "pending"
+"""extract_status of a new file whose name is indexed but whose text isn't read yet."""
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,8 @@ class ScanProgress:
     total: int | None
     """Files to read in this scan; None while listing."""
     path: str
+    bytes_done: int = 0
+    bytes_total: int = 0
 
 
 Progress = Callable[[ScanProgress], None]
@@ -70,6 +77,8 @@ class ScanReport:
     unavailable: str | None = None
     """Why the whole root could not be scanned (e.g. a drive that isn't connected)."""
     workers: int = 1
+    slow: list[tuple[str, float]] = field(default_factory=list)
+    """(path, seconds) for the slowest files, slowest first."""
 
 
 def _stem(path: str) -> str:
@@ -119,6 +128,7 @@ class Examined:
     read: bool
     """The bytes were read (False: skipped, or the read failed)."""
     extracted: bool
+    seconds: float = 0.0
 
 
 def examine(
@@ -129,13 +139,24 @@ def examine(
     read_placeholders: bool,
 ) -> Examined:
     """Read, hash and (if the bytes changed) extract one file. Runs in worker processes."""
+    started = time.perf_counter()
     data, skipped = read_bytes(connector, remote, size_limit, read_placeholders=read_placeholders)
     if data is None:
         return Examined(remote.content_sha256, skipped, read=False, extracted=False)
     sha = sha256_bytes(data)
     if old_sha is not None and sha == old_sha:
         return Examined(sha, None, read=True, extracted=False)
-    return Examined(sha, extract(remote.path.rsplit("/", 1)[-1], data), read=True, extracted=True)
+    result = extract(remote.path.rsplit("/", 1)[-1], data)
+    return Examined(sha, result, read=True, extracted=True,
+                    seconds=time.perf_counter() - started)  # fmt: skip
+
+
+def _quiet_worker() -> None:
+    """Runs first in each worker: parsers' warnings about odd files are noise to users and
+    would otherwise print straight to the terminal."""
+    root = logging.getLogger()
+    root.handlers[:] = [logging.NullHandler()]
+    root.setLevel(logging.CRITICAL)
 
 
 def _picklable(connector: Connector) -> bool:
@@ -167,7 +188,9 @@ def _examine_all(
         return
 
     # "spawn" behaves the same on every OS and is safe while other threads are running.
-    pool = futures.ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn"))
+    pool = futures.ProcessPoolExecutor(
+        workers, mp_context=multiprocessing.get_context("spawn"), initializer=_quiet_worker
+    )
     queue = iter(jobs)
     running: dict[futures.Future[Examined], Job] = {}
     try:
@@ -246,6 +269,11 @@ def scan_root(
                     new_files.append(stored)
                 pending += 1
             else:
+                if old is None or old.extract_status == PENDING:
+                    # Searchable by name right away; the text follows when it's read.
+                    upsert_file(conn, _pending_row(root, remote, now), None)
+                    old = None
+                    pending += 1
                 jobs.append((remote, old))
             if pending >= COMMIT_EVERY:
                 commit()
@@ -255,13 +283,22 @@ def scan_root(
         report.unavailable = str(exc)
         return report  # don't mark anything missing when the root itself is unreachable
 
+    commit()  # every new file is now findable by name
+    # Smallest first: most files become fully searchable early; big ones come last.
+    jobs.sort(key=lambda job: job[0].size)
+    bytes_total = sum(job[0].size for job in jobs)
+    bytes_done = 0
     report.workers = worker_count(settings)
     try:
         for done, (remote, old, examined) in enumerate(
             _examine_all(connector, jobs, settings, report.workers)
         ):
+            bytes_done += remote.size
+            if examined.seconds >= SLOW_SECONDS:
+                report.slow.append((remote.path, examined.seconds))
             if progress is not None:
-                progress(ScanProgress(root, "reading", done, len(jobs), remote.path))
+                progress(ScanProgress(root, "reading", done + 1, len(jobs), remote.path,
+                                      bytes_done, bytes_total))  # fmt: skip
             stored = _apply(conn, root, remote, old, examined, now, snapshots, report)
             if stored is not None:
                 new_files.append(stored)
@@ -294,13 +331,29 @@ def scan_root(
     report.changed.sort()
     report.errors.sort()
     report.skipped.sort()
+    report.slow = sorted(report.slow, key=lambda s: -s[1])[:10]
     return report
+
+
+def _pending_row(root: Root, remote: RemoteFile, now: str) -> FileInfo:
+    return FileInfo(
+        root_id=root.id,
+        path=remote.path,
+        size=remote.size,
+        modified=remote.modified,
+        ext=extension(remote.path),
+        placeholder=remote.is_placeholder,
+        title=_stem(remote.path),
+        extract_status=PENDING,
+        last_seen=now,
+    )
 
 
 def _unchanged(old: FileInfo | None, remote: RemoteFile) -> bool:
     return (
         old is not None
         and old.status == "present"
+        and old.extract_status != PENDING
         and old.size == remote.size
         and old.modified == remote.modified
         and old.placeholder == remote.is_placeholder

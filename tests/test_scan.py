@@ -249,7 +249,8 @@ def test_progress_is_reported_per_file(lab: Lab) -> None:
     calls: list[ScanProgress] = []
     scan_root(lab.conn, lab.root, lab.connector, lab.snaps, None, calls.append)
     reading = [c for c in calls if c.phase == "reading"]
-    assert [c.done for c in reading] == list(range(9))
+    assert [c.done for c in reading] == list(range(1, 10))
+    assert reading[-1].bytes_done == reading[-1].bytes_total > 0
     assert {c.total for c in reading} == {9}
     assert PROTOCOL in [c.path for c in reading]
     assert calls[0].phase == "listing" and calls[0].root == lab.root
@@ -300,3 +301,56 @@ def test_worker_count_setting() -> None:
     assert worker_count(Settings(scan_workers=3)) == 3
     assert worker_count(Settings(scan_workers=99)) == MAX_WORKERS
     assert 1 <= worker_count(Settings()) <= MAX_WORKERS
+
+
+def test_names_are_searchable_before_text_and_a_stopped_scan_resumes(
+    lab: Lab, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from eridi.core.index.search import search
+
+    real = scan_module._examine_all
+
+    def stop_after_two(*args: Any, **kwargs: Any) -> Any:
+        for n, item in enumerate(real(*args, **kwargs)):
+            if n == 2:
+                raise KeyboardInterrupt
+            yield item
+
+    monkeypatch.setattr(scan_module, "_examine_all", stop_after_two)
+    with pytest.raises(KeyboardInterrupt):
+        lab.scan()
+    monkeypatch.undo()
+
+    # Every file is findable by name already, though most text isn't read yet.
+    hits = search(lab.conn, "Western_blot_blocking_v7")
+    assert [h.path for h in hits] == [PROTOCOL]
+    statuses = [f.extract_status for f in list_files(lab.conn, lab.root.id)]
+    assert statuses.count("pending") == 7
+
+    # The next scan reads the rest and reports them as new, not changed.
+    report = lab.scan()
+    assert len(report.new) == 7 and report.changed == []
+    assert "pending" not in [f.extract_status for f in list_files(lab.conn, lab.root.id)]
+    assert search(lab.conn, "Primary antibody incubation")
+
+
+def test_smallest_files_are_read_first(lab: Lab) -> None:
+    calls: list[ScanProgress] = []
+    scan_root(lab.conn, lab.root, lab.connector, lab.snaps, None, calls.append)
+    sizes = [c.bytes_done for c in calls if c.phase == "reading"]
+    steps = [b - a for a, b in zip([0, *sizes], sizes, strict=False)]
+    assert steps == sorted(steps)
+
+
+def test_slow_files_are_reported(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dataclasses import replace as dc_replace
+
+    real = scan_module.examine
+
+    def slow(*args: Any, **kwargs: Any) -> Any:
+        result = real(*args, **kwargs)
+        return dc_replace(result, seconds=12.0) if args[1].path == PROTOCOL else result
+
+    monkeypatch.setattr(scan_module, "examine", slow)
+    report = lab.scan()
+    assert report.slow == [(PROTOCOL, 12.0)]

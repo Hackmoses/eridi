@@ -24,7 +24,7 @@ dependencies = [
     "openpyxl>=3.1",      # .xlsx text
     "pathspec>=0.12",     # gitignore-style patterns for .eridiignore
     "platformdirs>=4.2",  # correct per-OS app-data locations
-    "pypdf>=5.0",         # .pdf text (pure Python, no system libraries)
+    "pypdfium2>=4.30",    # .pdf text via PDFium (fast, prebuilt for macOS, Windows, Linux)
     "python-docx>=1.1",   # .docx text
     "python-pptx>=1.0",   # .pptx text
     "python-ulid>=3.0",   # sortable IDs that are unique across devices
@@ -75,6 +75,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]  # allow non-ASCII text in strings and c
 strict = true
 python_version = "3.12"
 mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["pypdfium2", "pypdfium2.*"]  # ships no type information
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
