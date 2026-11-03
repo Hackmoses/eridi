@@ -799,16 +799,28 @@ class Eridi:
             log.warning("Record folder not available: %s", exc)
             return None
 
-    def refresh_record(self) -> list[Entry]:
-        """Read entries that arrived in the record folder (from labmates or other computers)
-        now, and return them oldest first."""
+    def latest_entry_id(self) -> str | None:
+        """The newest entry ID in the index (a watermark for `arrivals_after`)."""
         with self._lock:
-            report = self._refresh_records(force=True)
-            if report is None or not report.added_ids:
-                return []
-            self.last_activity = utc_now()
-            found = (self._get_entry(i) for i in report.added_ids)
-            return [e for e in found if e is not None]
+            row = self.conn.execute("SELECT max(id) FROM entries").fetchone()
+            return None if row[0] is None else str(row[0])
+
+    def arrivals_after(self, entry_id: str | None) -> list[Entry]:
+        """Read the record folder now, and return entries newer than `entry_id` that other
+        computers wrote (labmates, or your other devices), oldest first.
+
+        Works however many Eridi processes share this computer's index: whichever one
+        loads a new entry first, every one of them reports it."""
+        with self._lock:
+            self._refresh_records(force=True)
+            rows = self.conn.execute(
+                "SELECT json FROM entries WHERE id > ? ORDER BY id", (entry_id or "",)
+            ).fetchall()
+            entries = [parse_entry(json.loads(r[0])) for r in rows]
+            arrived = [e for e in entries if e.device_id != self._config.device_id]
+            if arrived:
+                self.last_activity = utc_now()
+            return arrived
 
     def _referenced_texts(self) -> set[str]:
         rows = self.conn.execute(

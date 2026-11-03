@@ -178,3 +178,26 @@ def test_problems_are_reported(conn: sqlite3.Connection, store: RecordStore) -> 
     report = sync_records(conn, store)
     assert report.added == 1
     assert len(report.problems) == 1
+
+
+def test_two_processes_loading_the_same_new_entry(tmp_path: Path) -> None:
+    """The web app and `eridi watch` share one index; both may see a labmate's new entry
+    before either has stored it. The second must skip it, not fail or duplicate it."""
+    import eridi.core.index.records as records
+
+    store = RecordStore.init(tmp_path / "record")
+    index = tmp_path / "index.sqlite"
+    app_conn, watch_conn = open_index(index), open_index(index)
+    note = entry(text="Gel imager booked.", subjects=[Subject("root_A", "a.docx")])
+    store.append(note)
+    real = records._known_ids
+    seen_before = real(watch_conn)  # the watcher looked before the app stored the entry
+    sync_records(app_conn, store)
+    records._known_ids = lambda conn: seen_before  # type: ignore[assignment]
+    try:
+        report = sync_records(watch_conn, store, full=True)  # reads every entry file
+    finally:
+        records._known_ids = real
+    assert report.added == 0 and report.added_ids == []
+    assert watch_conn.execute("SELECT count(*) FROM entries").fetchone()[0] == 1
+    assert watch_conn.execute("SELECT count(*) FROM entry_subjects").fetchone()[0] == 1

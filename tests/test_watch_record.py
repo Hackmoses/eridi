@@ -152,3 +152,20 @@ def test_watch_command_shows_labmates_notes(lab: Eridi, monkeypatch: pytest.Monk
     result = CliRunner().invoke(cli_main.app, ["watch"])
     assert "and the record" in result.output
     assert "B. Lee: Gel imager booked for Friday." in result.output
+
+
+def test_both_processes_report_a_labmates_entry(lab: Eridi, tmp_path: Path) -> None:
+    """The web app and `eridi watch` share this computer's index. Whichever loads a
+    labmate's entry first, the watcher still reports it."""
+    arrived: list[Entry] = []
+    watcher = Watcher(lab, debounce=0.2, on_entries=arrived.extend)
+    watcher._seen_entry = lab.latest_entry_id()
+    entry = labmate_writes(lab, "Seen first by the other process.")
+    with Eridi() as web_app:  # same ERIDI_HOME: the same index
+        assert entry.id in {e.id for e in web_app.recent()}  # it loads the entry first
+    watcher.note_record()
+    watcher.flush()
+    assert [e.id for e in arrived] == [entry.id]
+    watcher.note_record()
+    watcher.flush()
+    assert len(arrived) == 1  # reported once

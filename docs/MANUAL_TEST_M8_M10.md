@@ -173,7 +173,10 @@ the same synced folder appearing at a different path on the second computer.
    ✅ `Recognized from its folder marker.`, and the history shows A. Okafor's note
    about the protocol, on computer B.
 
-3. **Notes appear on the other computer within seconds.** In window **A**:
+3. **Notes appear on the other computer within seconds.** If the web app
+   (`uv run eridi open`) is still running for computer A, stop it first with Ctrl+C: it
+   watches too, so an edit would show in whichever of the two notices it first. Then in
+   window **A**:
 
    ```bash
    uv run eridi watch

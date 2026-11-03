@@ -108,6 +108,8 @@ class Watcher:
         Keys are root IDs, or `RECORD` for the record folder."""
         self._last_poll = time.monotonic()
         self._record_dirty = False
+        self._seen_entry: str | None = None
+        """The newest entry already accounted for (arrivals after it are reported)."""
         self._pending: dict[str, set[str]] = {}
         self._full: set[str] = set()
         self._last_event = 0.0
@@ -138,6 +140,7 @@ class Watcher:
     def start(self) -> None:
         if self._thread is not None:
             return
+        self._seen_entry = self.eridi.latest_entry_id()
         try:
             self._observer.start()
             self._observer_running = True
@@ -223,7 +226,9 @@ class Watcher:
             full, self._full = self._full, set()
             record, self._record_dirty = self._record_dirty, False
         if record:
-            arrived = self.eridi.refresh_record()
+            arrived = self.eridi.arrivals_after(self._seen_entry)
+            if arrived:
+                self._seen_entry = arrived[-1].id
             if arrived and self.on_entries is not None:
                 self.on_entries(arrived)
         reports: list[tuple[str, ScanReport]] = []

@@ -905,6 +905,12 @@ def watch() -> None:
         out.print(
             f"Watching {escape(names)} and the record. Save a file to see it here. Ctrl+C to stop."
         )
+        if running_server() is not None:
+            out.print(
+                "[yellow]The Eridi app is open too, and it also watches.[/yellow] Labmates' "
+                "notes show in both; an edit shows in whichever notices it first (all of "
+                "them are on the app's Activity page)."
+            )
         for key, reason in watcher.polled.items():
             what = "the record folder" if key == "record" else eridi.root_label(key) or key
             out.print(

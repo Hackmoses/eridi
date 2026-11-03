@@ -47,10 +47,12 @@ def _fts_values(entry: Entry) -> tuple[str, str, str]:
     return entry.text, " ".join(entry.tags), "\n".join(summary_parts)
 
 
-def _insert(conn: sqlite3.Connection, entry: Entry) -> None:
-    conn.execute(
-        "INSERT INTO entries (id, kind, created_at, author_name, author_kind, project_id, "
-        "outcome, text, supersedes, target_id, change_to_text_sha256, state, json) "
+def _insert(conn: sqlite3.Connection, entry: Entry) -> bool:
+    """Add an entry. False if it's already there: another Eridi process sharing this index
+    (the web app and `eridi watch`, say) can load the same new entry at the same moment."""
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO entries (id, kind, created_at, author_name, author_kind, "
+        "project_id, outcome, text, supersedes, target_id, change_to_text_sha256, state, json) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)",
         (
             entry.id,
@@ -67,10 +69,13 @@ def _insert(conn: sqlite3.Connection, entry: Entry) -> None:
             serialize_entry(entry),
         ),
     )
+    if cursor.rowcount == 0:
+        return False
     conn.executemany(
         "INSERT INTO entry_subjects (entry_id, root_id, path, text_sha256) VALUES (?, ?, ?, ?)",
         [(entry.id, s.root_id, s.path, s.text_sha256) for s in entry.subjects],
     )
+    return True
 
 
 def _delete(conn: sqlite3.Connection, entry_id: str) -> None:
@@ -175,8 +180,7 @@ def sync_records(
             for entry_id in gone:
                 _delete(conn, entry_id)
             report.removed = len(gone)
-        for e in new:
-            _insert(conn, e)
+        new = [e for e in new if _insert(conn, e)]
         report.added = len(new)
         report.added_ids = [e.id for e in new]
         if new or report.removed:
