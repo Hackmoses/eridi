@@ -18,7 +18,19 @@ useful as AI improves.
 
 ## Status
 
-Nothing is built yet. See:
+The engine's foundations are in place: the record store, local folders, text extraction,
+and search. There is no command line or app yet (from milestone M5). To try the pieces on
+your own folders:
+
+```bash
+uv sync
+uv run python scripts/check_extract.py "<a lab folder>"
+uv run python scripts/check_search.py "<a lab folder>" "blocking buffer"
+uv run python scripts/check_record.py write "<a record folder>" --device "Mac"
+uv run python scripts/check_record.py read "<a record folder>"
+```
+
+See:
 
 - [`docs/PLAN.md`](docs/PLAN.md): milestones, tasks and tests
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): design and structure

@@ -106,6 +106,7 @@ def _file_hits(
         f"""
         SELECT f.root_id, f.path, f.title, r.label AS root_label,
                bm25(files_fts, 5.0, 10.0, 1.0) AS score,
+               snippet(files_fts, 2, ?, ?, '…', {SNIPPET_TOKENS}) AS body_snip,
                snippet(files_fts, -1, ?, ?, '…', {SNIPPET_TOKENS}) AS snip
         FROM files_fts
         JOIN files f ON f.id = files_fts.rowid
@@ -114,14 +115,16 @@ def _file_hits(
         {project_filter}
         ORDER BY score LIMIT ?
         """,  # noqa: S608 - only constant SQL fragments are interpolated
-        [HIGHLIGHT_START, HIGHLIGHT_END, *params],
+        [HIGHLIGHT_START, HIGHLIGHT_END, HIGHLIGHT_START, HIGHLIGHT_END, *params],
     ).fetchall()
     return [
         SearchHit(
             kind="file",
             id=f"{r['root_id']}:{r['path']}",
             title=r["title"] or r["path"].rsplit("/", 1)[-1],
-            snippet=r["snip"] or "",
+            # Prefer a passage from the text; fall back to wherever the match is.
+            snippet=(r["body_snip"] if HIGHLIGHT_START in (r["body_snip"] or "") else r["snip"])
+            or "",
             score=float(r["score"]),
             root_id=r["root_id"],
             root_label=r["root_label"],

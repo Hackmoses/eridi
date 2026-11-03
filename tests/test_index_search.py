@@ -92,6 +92,15 @@ def test_record_hits_rank_above_equal_file_hits(conn: sqlite3.Connection, tmp_pa
     assert [h.kind for h in hits] == ["entry", "file"]
 
 
+def test_file_snippet_prefers_text_over_path(
+    lab_index: tuple[sqlite3.Connection, RecordStore],
+) -> None:
+    conn, _ = lab_index
+    pdf = next(h for h in search(conn, "blocking buffer") if h.path.endswith(".pdf"))  # type: ignore[union-attr]
+    assert "comparison.pdf" not in pdf.plain_snippet
+    assert f"{HIGHLIGHT_START}Blocking{HIGHLIGHT_END}" in pdf.snippet
+
+
 def test_snippet_rendering(lab_index: tuple[sqlite3.Connection, RecordStore]) -> None:
     conn, _ = lab_index
     hit = search(conn, "background")[0]
