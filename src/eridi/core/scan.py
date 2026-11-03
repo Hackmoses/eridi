@@ -31,6 +31,7 @@ from typing import Literal
 from eridi.connectors.base import Connector, ConnectorError, RemoteFile
 from eridi.core.config import Settings
 from eridi.core.extract import ExtractResult, extension, extract, extractor_for
+from eridi.core.extract.base import READER_VERSION, ExtractStatus
 from eridi.core.hashing import sha256_bytes, sha256_text
 from eridi.core.index.files import (
     get_file,
@@ -347,11 +348,11 @@ def scan_root(
         return report  # don't mark anything missing when the root itself is unreachable
 
     commit()  # every new file is now findable by name
-    # Smallest first: most files become fully searchable early; big ones come last.
-    jobs.sort(key=lambda job: job[0].size)
+    # Newest first: what you worked on recently is what you're likely to search for.
+    jobs.sort(key=lambda job: -job[0].modified)
     bytes_total = sum(job[0].size for job in jobs)
     bytes_done = 0
-    known = _texts_known(conn) if jobs else frozenset()
+    known = frozenset(snapshots.reusable(READER_VERSION)) if jobs else frozenset()
     try:
         for done, (remote, old, examined) in enumerate(
             _examine_all(connector, jobs, settings, report, known)
@@ -463,7 +464,7 @@ def scan_files(
                 upsert_file(conn, _pending_row(root, remote, now), None)
                 old = None
             jobs.append((remote, old))
-    known = _texts_known(conn) if jobs else frozenset()
+    known = frozenset(snapshots.reusable(READER_VERSION)) if jobs else frozenset()
     try:
         for remote, old, examined in _examine_all(connector, jobs, settings, report, known):
             stored = _apply(conn, root, remote, old, examined, now, snapshots, report)
@@ -477,29 +478,16 @@ def scan_files(
     return _sorted(report)
 
 
-def _texts_known(conn: sqlite3.Connection) -> frozenset[str]:
-    """Content hashes of files whose text is already indexed, so copies aren't re-read."""
-    rows = conn.execute(
-        "SELECT DISTINCT content_sha256 FROM files WHERE content_sha256 IS NOT NULL "
-        "AND extract_status IN ('ok', 'needs_ocr') LIMIT 1000000"
-    )
-    return frozenset(r[0] for r in rows)
-
-
-def _copied_result(conn: sqlite3.Connection, content_sha: str, path: str) -> ExtractResult:
-    """The indexed text of another file with these exact bytes."""
-    row = conn.execute(
-        "SELECT f.title, f.extract_status, t.body, f.path FROM files f "
-        "JOIN files_fts t ON t.rowid = f.id WHERE f.content_sha256 = ? "
-        "AND f.extract_status IN ('ok', 'needs_ocr') LIMIT 1",
-        (content_sha,),
-    ).fetchone()
-    if row is None:  # gone since the scan started: an empty result is safe; next scan fixes
+def _copied_result(snapshots: SnapshotStore, content_sha: str, path: str) -> ExtractResult:
+    """Text Eridi already read from a file with these exact bytes (a copy, a rename, or the
+    same file during a rebuild), so it isn't parsed again."""
+    found = snapshots.reusable(READER_VERSION).get(content_sha)
+    text = snapshots.get(found[0]) if found else None
+    if found is None or text is None:  # evicted meanwhile: safe; the next change re-reads
         return ExtractResult("", _stem(path), "name_only")
-    title = row[0]
-    if title == _stem(row[3]):  # a title taken from the other file's name, not its contents
-        title = _stem(path)
-    return ExtractResult(row[2] or "", title, row[1])
+    _, title, status = found
+    kind: ExtractStatus = "needs_ocr" if status == "needs_ocr" else "ok"
+    return ExtractResult(text, title or _stem(path), kind)
 
 
 def _pending_row(root: Root, remote: RemoteFile, now: str) -> FileInfo:
@@ -551,7 +539,7 @@ def _apply(
     )
     if examined.duplicate and examined.content_sha256 is not None:
         examined = replace(
-            examined, result=_copied_result(conn, examined.content_sha256, remote.path)
+            examined, result=_copied_result(snapshots, examined.content_sha256, remote.path)
         )
     if examined.result is None:
         # Touched or re-saved with identical bytes: update the metadata, keep the text.
@@ -574,10 +562,13 @@ def _apply(
     text_sha = sha256_text(result.text) if result.text else None
     info = replace(base, text_sha256=text_sha, title=result.title, extract_status=result.status)
     old_text = old.text_sha256 if old is not None else None
-    if result.text and text_sha != old_text:
+    if result.text and (text_sha != old_text or examined.extracted):
         snapshots.put(result.text)
+        # A title taken from the file name isn't logged, so a copy gets its own name.
+        title = None if result.title == _stem(remote.path) else result.title
         snapshots.log_version(root.id, remote.path, text_sha or "", now,
-                              content_sha256=examined.content_sha256)  # fmt: skip
+                              content_sha256=examined.content_sha256, title=title,
+                              status=result.status, reader=READER_VERSION)  # fmt: skip
     stored = upsert_file(conn, info, result.text)
 
     if old is None:

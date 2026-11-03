@@ -35,6 +35,10 @@ class ExtractResult:
 
 Extractor = Callable[[bytes], ExtractResult]
 
+READER_VERSION = 2
+"""Bump whenever any extractor's output changes (2: Word tracked changes and comments, PDF
+comments). Text read by an older version is never reused; files are read again instead."""
+
 MAX_TEXT_CHARS = 2_000_000
 
 _REGISTRY: dict[str, Extractor] = {}

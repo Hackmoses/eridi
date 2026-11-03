@@ -45,6 +45,10 @@ class VersionLine:
     from_path: str | None = None
     content_sha256: str | None = None
     """The file's bytes for this version. Older log lines don't have it."""
+    title: str | None = None
+    status: str | None = None
+    reader: int | None = None
+    """`READER_VERSION` of the extractor that produced the text (None in older lines)."""
 
     def to_json(self) -> str:
         data: dict[str, Any] = {"kind": self.kind, "root_id": self.root_id, "path": self.path}
@@ -53,6 +57,10 @@ class VersionLine:
             data |= {"text_sha256": self.text_sha256, "source": self.source}
             if self.content_sha256:
                 data["content_sha256"] = self.content_sha256
+            for key in ("title", "status", "reader"):
+                value = getattr(self, key)
+                if value is not None:
+                    data[key] = value
         else:
             data["from_path"] = self.from_path
         return json.dumps(data, ensure_ascii=False, sort_keys=True)
@@ -69,6 +77,9 @@ def _parse_line(raw: str) -> VersionLine | None:
                 "version", data["root_id"], data["path"], data["at"],
                 text_sha256=data["text_sha256"], source=data.get("source", "scan"),
                 content_sha256=data.get("content_sha256"),
+                title=data.get("title"),
+                status=data.get("status"),
+                reader=data.get("reader"),
             )  # fmt: skip
         if kind == "move":
             return VersionLine(
@@ -83,8 +94,10 @@ class SnapshotStore:
     def __init__(self, folder: Path | None = None, cap_bytes: int = 500 * 1024 * 1024) -> None:
         self.folder = folder or app_home() / "snapshots"
         self.cap_bytes = cap_bytes
-        self._logged: set[tuple[str, str, str]] | None = None
+        self._logged: set[tuple[str, str, str, int | None]] | None = None
         self._pending: list[str] = []
+        self._reuse: dict[str, tuple[str, str | None, str | None]] | None = None
+        self._reuse_reader: int | None = None
 
     # --- text ---
 
@@ -149,6 +162,8 @@ class SnapshotStore:
                 path.unlink()
             total -= size
             removed.append(sha)
+        if removed:
+            self._reuse = None  # some reusable text may be gone
         return removed
 
     # --- version log ---
@@ -205,23 +220,50 @@ class SnapshotStore:
         at: str,
         source: str = "scan",
         content_sha256: str | None = None,
+        title: str | None = None,
+        status: str | None = None,
+        reader: int | None = None,
     ) -> bool:
         """Record that a file had this text. Returns False if that was already logged."""
         if self._logged is None:
             self._logged = {
-                (ln.root_id, ln.path, ln.text_sha256 or "")
+                (ln.root_id, ln.path, ln.text_sha256 or "", ln.reader)
                 for ln in self.read_log()
                 if ln.kind == "version"
             }
-        key = (root_id, path, text_sha256)
+        key = (root_id, path, text_sha256, reader)
         if key in self._logged:
             return False
         self._append(
             VersionLine("version", root_id, path, at, text_sha256, source,
-                        content_sha256=content_sha256)
+                        content_sha256=content_sha256, title=title, status=status,
+                        reader=reader)
         )  # fmt: skip
         self._logged.add(key)
+        if self._reuse is not None and reader == self._reuse_reader and content_sha256:
+            self._reuse[content_sha256] = (text_sha256, title, status)
         return True
+
+    def reusable(self, reader: int) -> dict[str, tuple[str, str | None, str | None]]:
+        """Text already read, by content hash: {content_sha256: (text_sha256, title, status)}.
+
+        Only text from the current reader version whose snapshot is still stored, so a
+        rebuild or re-scan can skip reading files whose bytes it has seen before. Cached;
+        kept up to date as versions are logged."""
+        if self._reuse is not None and self._reuse_reader == reader:
+            return self._reuse
+        found: dict[str, tuple[str, str | None, str | None]] = {}
+        for line in self.read_log():
+            if (
+                line.kind == "version"
+                and line.reader == reader
+                and line.content_sha256
+                and line.text_sha256
+            ):
+                found[line.content_sha256] = (line.text_sha256, line.title, line.status)
+        self._reuse = {c: v for c, v in found.items() if self.has(v[0])}
+        self._reuse_reader = reader
+        return self._reuse
 
     def log_move(self, root_id: str, from_path: str, to_path: str, at: str) -> None:
         self._append(VersionLine("move", root_id, to_path, at, from_path=from_path))

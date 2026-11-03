@@ -334,12 +334,17 @@ def test_names_are_searchable_before_text_and_a_stopped_scan_resumes(
     assert search(lab.conn, "Primary antibody incubation")
 
 
-def test_smallest_files_are_read_first(lab: Lab) -> None:
+def test_newest_files_are_read_first(lab: Lab) -> None:
+    import os
+
+    for n, path in enumerate(sorted(lab.sample.root.rglob("*"))):
+        if path.is_file():
+            os.utime(path, (1_700_000_000 + n, 1_700_000_000 + n))
     calls: list[ScanProgress] = []
     scan_root(lab.conn, lab.root, lab.connector, lab.snaps, None, calls.append)
-    sizes = [c.bytes_done for c in calls if c.phase == "reading"]
-    steps = [b - a for a, b in zip([0, *sizes], sizes, strict=False)]
-    assert steps == sorted(steps)
+    order = [c.path for c in calls if c.phase == "reading"]
+    stamps = [(lab.sample.root / p).stat().st_mtime for p in order]
+    assert stamps == sorted(stamps, reverse=True)
 
 
 def test_slow_files_are_reported(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -409,3 +414,34 @@ def test_copies_of_indexed_files_are_not_read_again(lab: Lab) -> None:
     assert stored is not None and original is not None
     assert stored.text_sha256 == original.text_sha256
     assert stored.title == original.title  # a title from the contents carries over
+
+
+def test_rebuild_reuses_text_already_read(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Files whose bytes were read before aren't parsed again (rebuilds, renames, copies)."""
+    lab.scan()
+    calls: list[str] = []
+    real = scan_module.extract
+    monkeypatch.setattr(scan_module, "extract", lambda n, d: calls.append(n) or real(n, d))
+    fresh = open_index(Path(":memory:"))
+    report = scan_root(fresh, lab.root, lab.connector, lab.snaps)
+    assert len(report.new) == 9
+    # Every file with text came from the snapshots; only the two with no text (a Google
+    # Docs shortcut and a scan) are looked at again, which is cheap.
+    assert sorted(calls) == ["Cell culture SOP.gdoc", "Scanned_notebook_page.pdf"]
+    original = {f.path: (f.text_sha256, f.title) for f in list_files(lab.conn, lab.root.id)}
+    rebuilt = {f.path: (f.text_sha256, f.title) for f in list_files(fresh, lab.root.id)}
+    assert rebuilt == original
+    assert (
+        "Primary antibody incubation"
+        in (fresh.execute("SELECT body FROM files_fts WHERE path = ?", (PROTOCOL,)).fetchone()[0])
+    )
+
+
+def test_text_from_an_older_reader_is_read_again(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> None:
+    lab.scan()
+    monkeypatch.setattr(scan_module, "READER_VERSION", 999)
+    calls: list[str] = []
+    real = scan_module.extract
+    monkeypatch.setattr(scan_module, "extract", lambda n, d: calls.append(n) or real(n, d))
+    scan_root(open_index(Path(":memory:")), lab.root, lab.connector, lab.snaps)
+    assert len(calls) == 9  # nothing reused from the "older" reader
