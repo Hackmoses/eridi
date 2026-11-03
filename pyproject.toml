@@ -19,8 +19,10 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.115",
+    "httpx>=0.28",
     "keyring>=25",
     "mcp>=2.3",           # official MCP SDK, so AI assistants can use the record
+    "msal>=1.31",
     "openpyxl>=3.1",      # .xlsx text
     "pathspec>=0.12",     # gitignore-style patterns for .eridiignore
     "platformdirs>=4.2",  # correct per-OS app-data locations
@@ -79,6 +81,10 @@ mypy_path = "src"
 
 [[tool.mypy.overrides]]
 module = ["pypdfium2", "pypdfium2.*"]  # ships no type information
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["msal", "msal.*"]  # ships no type information
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

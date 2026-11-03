@@ -157,6 +157,8 @@ class Root:
     search: bool = True
     save: bool = False
     is_home_default: bool = False
+    account: str = ""
+    """For cloud storage: the signed-in account it is read with (empty for local folders)."""
 
 
 @dataclass(frozen=True)

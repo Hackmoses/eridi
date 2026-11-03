@@ -43,6 +43,9 @@ class Settings:
     """Processes reading files in parallel during a scan; 0 means one per CPU core."""
     watch: bool = True
     """While the app runs, notice saved files within seconds instead of waiting to scan."""
+    microsoft_client_id: str = ""
+    """The Microsoft Entra app ID used to sign in to OneDrive and SharePoint; empty uses
+    Eridi's own. The `ERIDI_MS_CLIENT_ID` environment variable overrides both."""
 
     @property
     def size_limit_bytes(self) -> int:
@@ -129,7 +132,7 @@ def _parse(path: Path, data: dict[str, Any]) -> Config:
     for f in fields(Settings):
         if f.name in settings_data:
             kind = type(getattr(defaults, f.name))
-            label = "true or false" if kind is bool else "a whole number"
+            label = {bool: "true or false", str: "text"}.get(kind, "a whole number")
             values[f.name] = _typed(path, f"settings.{f.name}", settings_data[f.name], kind, label)
     settings = Settings(**values)
     if settings.size_limit_mb <= 0:
