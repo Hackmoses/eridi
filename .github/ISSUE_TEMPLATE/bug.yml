@@ -1,0 +1,30 @@
+name: Bug
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+  - type: input
+    id: version
+    attributes:
+      label: Eridi version and operating system
+      placeholder: "eridi 0.0.1, macOS 15"
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "Don't paste document contents or patient information."
