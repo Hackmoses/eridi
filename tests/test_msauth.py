@@ -141,7 +141,7 @@ def test_other_failures(app: FakeApp) -> None:
     with pytest.raises(MicrosoftAuthError, match="cancelled"):
         auth_with(app).sign_in()
     app.result = {"error": "server_error", "error_description": "AADSTS500011: boom\nTrace ID"}
-    with pytest.raises(MicrosoftAuthError, match="AADSTS500011: boom$"):
+    with pytest.raises(MicrosoftAuthError, match=r"AADSTS500011: boom$"):
         auth_with(app).sign_in()
 
 
@@ -151,7 +151,7 @@ def test_token_needs_sign_in(app: FakeApp) -> None:
         auth.token("uid.tid")
     auth.sign_in()
     app.silent = None  # the refresh token expired or was revoked
-    with pytest.raises(SignInNeededError, match="a.okafor@uni.example"):
+    with pytest.raises(SignInNeededError, match=r"a\.okafor@uni\.example"):
         auth.token("uid.tid")
 
 
