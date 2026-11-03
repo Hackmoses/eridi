@@ -66,3 +66,17 @@ everyone has to download the next version by hand.
 The Release workflow then builds signed update bundles (`.app.tar.gz` on macOS, the NSIS
 installer on Windows, the AppImage on Linux), collects them with
 `scripts/collect_bundles.py`, and writes `latest.json` with `scripts/update_manifest.py`.
+
+## Releasing
+
+1. Set the new version in `pyproject.toml`, `desktop/package.json`,
+   `desktop/src-tauri/Cargo.toml` and `desktop/src-tauri/tauri.conf.json` (then `uv lock`
+   and, in `desktop/`, `npm install` so the lock files agree). Commit.
+2. Tag and push: `git tag v0.6.0 && git push origin v0.6.0`.
+3. The Release workflow checks the tag matches the version and runs the tests; builds and
+   smoke-tests the engine on each OS; builds, signs and notarizes the installers; then
+   publishes a GitHub release with the installers, the standalone engines, `latest.json`
+   (when the updater key is set) and `SHA256SUMS`. A tag with a hyphen (`v0.6.0-rc.1`) is
+   published as a pre-release, which the updater ignores.
+
+To try a build without publishing: Actions → Release → Run workflow.

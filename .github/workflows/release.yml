@@ -12,8 +12,26 @@ permissions:
   contents: read
 
 jobs:
+  check:
+    name: Version and tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Tag matches the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: uv run --no-project python scripts/check_version.py "${GITHUB_REF_NAME}"
+      - name: Install
+        run: uv sync --locked
+      - name: Tests
+        run: uv run pytest -q -m "not browser"
+
   engine:
     name: Engine · ${{ matrix.target }}
+    needs: check
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -165,3 +183,43 @@ jobs:
           name: app-${{ matrix.target }}
           path: out/
           if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: desktop
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: app-*
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          path: dist
+          merge-multiple: true
+      - name: Update manifest (when update bundles are signed)
+        run: |
+          if ls dist/*.sig >/dev/null 2>&1; then
+            uv run --no-project python scripts/update_manifest.py dist "${GITHUB_REF_NAME}"
+          else
+            echo "No signed update bundles: this release won't be offered as an update."
+          fi
+      - name: Checksums
+        run: uv run --no-project python scripts/checksums.py dist
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in *-*) prerelease="--prerelease" ;; esac
+          gh release create "${GITHUB_REF_NAME}" dist/* --title "Eridi ${GITHUB_REF_NAME#v}" \
+            --generate-notes --verify-tag $prerelease
