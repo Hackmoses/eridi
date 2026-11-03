@@ -2,7 +2,8 @@
 
 Eridi reads OneDrive and SharePoint document libraries directly through Microsoft Graph,
 including files that are online-only on your computer and the version history Microsoft
-keeps. Access is read-only. For what Eridi reads and why, written for university IT, see
+keeps. Access is read-only, unless you turn Save on for a library to save files into it
+through Eridi; that asks you once for write permission. For what Eridi reads and why, written for university IT, see
 [`IT_APPROVAL.md`](IT_APPROVAL.md).
 
 ## Connect
@@ -32,8 +33,9 @@ it (once, for the project), or your own for development:
 4. After creating it, under **Authentication** turn on **Allow public client flows** (for
    the device-code fallback).
 5. Under **API permissions** → **Add a permission** → **Microsoft Graph** → **Delegated**,
-   add `Files.Read.All`, `Sites.Read.All`, `User.Read` and `offline_access`. Do not add any
-   write permissions.
+   add `Files.Read.All`, `Sites.Read.All`, `User.Read` and `offline_access`. For saving
+   (optional, asked for only when someone turns Save on), also add `Files.ReadWrite.All`
+   and `Sites.ReadWrite.All`.
 6. Copy the **Application (client) ID**. Put it in `DEFAULT_CLIENT_ID` in
    `src/eridi/connectors/msauth.py` for releases, or for your own copy set either
    `settings.microsoft_client_id` in `config.toml` or the `ERIDI_MS_CLIENT_ID` environment

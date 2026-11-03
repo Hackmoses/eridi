@@ -23,7 +23,7 @@ from eridi.connectors.base import (
     SavingConnector,
 )
 from eridi.connectors.local import read_root_marker, write_root_marker
-from eridi.connectors.msauth import MicrosoftAccount, MicrosoftAuth
+from eridi.connectors.msauth import MicrosoftAccount, MicrosoftAuth, WriteAccessNeededError
 from eridi.connectors.msgraph import (
     DriveInfo,
     GraphClient,
@@ -131,6 +131,18 @@ class AmbiguousFileError(EridiError):
 class UnknownProjectError(EridiError):
     def __init__(self, ref: str) -> None:
         super().__init__(f"No project matches {ref!r}. See `eridi project list`.")
+
+
+class SaveApprovalNeededError(EridiError):
+    """Turning Save on for Microsoft storage needs the user to allow Eridi to write."""
+
+    def __init__(self, root: Root) -> None:
+        self.root_id = root.id
+        super().__init__(
+            f"To save to {root.label!r}, allow Eridi to write there: run "
+            f"`eridi storage set {root.label!r} --save` in a terminal, or use Allow saving on "
+            "the Storage page, and approve the Microsoft sign-in."
+        )
 
 
 class UnknownEntryError(EridiError):
@@ -442,6 +454,11 @@ class Eridi:
     ) -> Root:  # fmt: skip
         with self._lock:
             root = self.get_root(root_id)
+            if save and not root.save and root.kind == "msgraph":
+                try:
+                    self.microsoft.token(root.account, write=True)
+                except WriteAccessNeededError:
+                    raise SaveApprovalNeededError(root) from None
             root = replace(
                 root,
                 label=label if label is not None else root.label,
@@ -568,9 +585,24 @@ class Eridi:
                 f"{root.label!r} has no Microsoft account. Remove it and add it again with "
                 "`eridi storage add-microsoft`."
             )
+        writer = None
+        if root.save:
+            auth, account = self.microsoft, root.account
+            writer = self.graph_client_factory(lambda: auth.token(account, write=True))
         return MsGraphConnector(
-            root.id, root.location, self._graph(root.account), cache=self._delta_cache()
-        )
+            root.id, root.location, self._graph(root.account), cache=self._delta_cache(),
+            writer=writer,
+        )  # fmt: skip
+
+    def allow_microsoft_saving(
+        self, root_id: str, *, device_code: bool = False, show: Callable[[str], None] = print
+    ) -> Root:
+        """Ask the user to let Eridi write to a Microsoft storage, then turn Save on."""
+        root = self.get_root(root_id)
+        if root.kind != "msgraph":
+            return self.update_root(root_id, save=True)
+        self.microsoft.allow_saving(root.account, device_code=device_code, show=show)
+        return self.update_root(root_id, save=True)
 
     def _microsoft_status(self, root: Root) -> tuple[str, str]:
         """Doctor's check for a Microsoft drive, without going online."""
@@ -782,6 +814,12 @@ class Eridi:
             connector = self.connector(root)
         if not isinstance(connector, SavingConnector):
             raise SaveRefusedError(f"Eridi can't save to {root.label!r} ({root.kind}) yet.")
+        try:
+            return self._put(connector, job, data)
+        except WriteAccessNeededError as exc:
+            raise SaveRefusedError(str(exc)) from None
+
+    def _put(self, connector: SavingConnector, job: OutboxJob, data: bytes) -> str:
         path = job.path
         if job.on_exists == "rename" and connector.exists(path):
             if _same_bytes(connector, path, job):

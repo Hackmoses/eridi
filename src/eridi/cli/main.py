@@ -20,6 +20,7 @@ from rich.markup import escape
 from rich.text import Text
 
 from eridi import __version__
+from eridi.connectors.base import ConnectorError
 from eridi.connectors.msauth import ApprovalRequiredError
 from eridi.connectors.msgraph import DriveInfo, root_id_for
 from eridi.core.changes import Activity, FileDiff, FileStats
@@ -35,6 +36,7 @@ from eridi.core.service import (
     Eridi,
     EridiError,
     NotInitializedError,
+    SaveApprovalNeededError,
     file_id,
 )
 
@@ -86,7 +88,9 @@ def session() -> Iterator[Eridi]:
     except AmbiguousFileError as exc:
         err_console().print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from None
-    except (EridiError, ConfigError, RecordFolderError, IndexUnavailableError) as exc:
+    except (
+        EridiError, ConfigError, RecordFolderError, IndexUnavailableError, ConnectorError
+    ) as exc:  # fmt: skip
         err_console().print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from None
     except KeyboardInterrupt:
@@ -455,10 +459,23 @@ def storage_set(
         bool | None,
         typer.Option("--save/--no-save", help="Allow saving files here through Eridi."),
     ] = None,
+    device_code: Annotated[
+        bool, typer.Option(help="For Microsoft: approve saving with a code, not a browser here.")
+    ] = False,
 ) -> None:
     """Change a storage's name, or turn Search or Save on or off."""
     with session() as eridi:
-        root = eridi.update_root(storage_id(eridi, storage), label=label, search=search, save=save)
+        root_id = storage_id(eridi, storage)
+        try:
+            root = eridi.update_root(root_id, label=label, search=search, save=save)
+        except SaveApprovalNeededError:
+            out = console()
+            out.print("Saving to Microsoft needs your permission for Eridi to write there.")
+            out.print("[dim]Approve it in the Microsoft sign-in that opens now.[/dim]")
+            eridi.allow_microsoft_saving(
+                root_id, device_code=device_code, show=lambda m: out.print(escape(m))
+            )
+            root = eridi.update_root(root_id, label=label, search=search, save=save)
         state = f"search {'on' if root.search else 'off'} · save {'on' if root.save else 'off'}"
         console().print(f"[bold]{escape(root.label)}[/bold]  [dim]{state}[/dim]")
 

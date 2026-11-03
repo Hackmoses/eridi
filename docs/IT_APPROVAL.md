@@ -16,7 +16,8 @@ files).
 ## What it asks for
 
 Delegated permissions only, so it acts as the signed-in user and sees only what they can
-already see. **Read-only. No write permissions are requested.**
+already see. **Read-only by default.** Two write permissions exist, asked for only if a
+researcher turns on "Save" for a library (see below).
 
 | Permission | Why |
 |---|---|
@@ -24,6 +25,17 @@ already see. **Read-only. No write permissions are requested.**
 | `Sites.Read.All` | List the SharePoint sites the user follows, so they can pick a lab library. |
 | `User.Read` | Show who is signed in. |
 | `offline_access` | Stay signed in between sessions without asking for the password each time. |
+
+Optional, only when a researcher turns Save on for a library, to save a file they chose
+into it (Eridi never replaces an existing file without asking, and never deletes or moves
+files):
+
+| Permission | Why |
+|---|---|
+| `Files.ReadWrite.All` | Upload the file the researcher saves through Eridi. |
+| `Sites.ReadWrite.All` | The same, for SharePoint document libraries. |
+
+To allow reading but not saving, grant admin consent for the read permissions only.
 
 There are no application (app-only) permissions, and no access to mail, calendar, Teams
 chats or other users' data. By Microsoft's defaults none of these needs an administrator;

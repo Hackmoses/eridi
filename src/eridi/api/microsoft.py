@@ -35,14 +35,18 @@ class MicrosoftSignIn:
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
 
-    def start(self, *, device_code: bool = False) -> bool:
-        """Start signing in. False if a sign-in is already waiting."""
+    def start(self, *, device_code: bool = False, allow_save: str | None = None) -> bool:
+        """Start signing in (or, with `allow_save=<storage ID>`, approving saving there).
+        False if a sign-in is already waiting."""
         with self._lock:
             if self.status.state == "waiting":
                 return False
             self.status = SignInState("waiting")
         self._thread = threading.Thread(
-            target=self._run, args=(device_code,), name="eridi-ms-sign-in", daemon=True
+            target=self._run,
+            args=(device_code, allow_save),
+            name="eridi-ms-sign-in",
+            daemon=True,
         )
         self._thread.start()
         return True
@@ -55,8 +59,15 @@ class MicrosoftSignIn:
         with self._lock:
             self.status.message = message
 
-    def _run(self, device_code: bool) -> None:
+    def _run(self, device_code: bool, allow_save: str | None = None) -> None:
         try:
+            if allow_save is not None:
+                self.eridi.allow_microsoft_saving(
+                    allow_save, device_code=device_code, show=self._show
+                )
+                with self._lock:
+                    self.status = SignInState("done", message="Saving is on.")
+                return
             account, drives = self.eridi.microsoft_sign_in(device_code=device_code, show=self._show)
         except ApprovalRequiredError as exc:
             with self._lock:

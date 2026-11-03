@@ -20,6 +20,7 @@ from eridi.core.service import (
     Eridi,
     EridiError,
     FileNotFoundInIndexError,
+    SaveApprovalNeededError,
     UnknownEntryError,
     UnknownProjectError,
     file_id,
@@ -414,6 +415,8 @@ def update_storage(request: Request, root_id: str, body: StorageIn) -> Any:
         root = _eridi(request).update_root(
             root_id, label=body.label, search=body.search, save=body.save
         )
+    except SaveApprovalNeededError as exc:
+        return JSONResponse({"error": str(exc), "needs_write_access": True}, status_code=400)
     except KNOWN_ERRORS as exc:
         return error(exc)
     return root_json(root)
@@ -512,6 +515,19 @@ def microsoft_status(request: Request) -> Any:
 def microsoft_sign_in(request: Request, body: MicrosoftSignInIn) -> Any:
     flow = _sign_in(request)
     started = flow.start(device_code=body.device_code)
+    return JSONResponse({**flow.as_json(), "started": started}, status_code=202)
+
+
+@router.post("/storage/{root_id}/allow-save")
+def allow_save(request: Request, root_id: str, body: MicrosoftSignInIn) -> Any:
+    """Ask Microsoft for permission to save (the sign-in opens in the browser); poll
+    `/microsoft/sign-in` for the result."""
+    try:
+        _eridi(request).get_root(root_id)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    flow = _sign_in(request)
+    started = flow.start(device_code=body.device_code, allow_save=root_id)
     return JSONResponse({**flow.as_json(), "started": started}, status_code=202)
 
 

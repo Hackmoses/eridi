@@ -369,6 +369,19 @@ function microsoftPanel() {
   return box;
 }
 
+async function allowSave(path, box) {
+  try { await api(path + "/allow-save", { body: { device_code: false } }); }
+  catch (error) { alert(error.message); return; }
+  box.disabled = true;
+  const timer = setInterval(async () => {
+    const s = await api("/microsoft/sign-in").catch(() => null);
+    if (!s || s.state === "waiting") return;
+    clearInterval(timer);
+    if (s.state !== "done") alert(s.message || "Sign-in didn't finish.");
+    renderStorage();
+  }, 1500);
+}
+
 async function renderStorage() {
   main.replaceChildren(el("h1", {}, "Storage"));
   const list = el("div", {});
@@ -383,8 +396,14 @@ async function renderStorage() {
       const toggle = (field, label) => {
         const id = `${field}-${i}`;
         const box = el("input", { type: "checkbox", id, checked: root[field], onchange: async () => {
-          try { Object.assign(root, await api("/storage/" + encodeURIComponent(root.id), { method: "PATCH", body: { [field]: box.checked } })); }
-          catch (error) { box.checked = !box.checked; alert(error.message); }
+          const path = "/storage/" + encodeURIComponent(root.id);
+          try { Object.assign(root, await api(path, { method: "PATCH", body: { [field]: box.checked } })); }
+          catch (error) {
+            box.checked = !box.checked;
+            if (field === "save" && root.kind === "msgraph" && confirm("Saving to Microsoft needs your permission for Eridi to write there. Open the Microsoft sign-in?")) {
+              allowSave(path, box);
+            } else alert(error.message);
+          }
         } });
         return el("label", { for: id, class: "switch" }, box, " " + label);
       };

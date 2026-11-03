@@ -1,4 +1,7 @@
-"""Microsoft OneDrive and SharePoint document libraries, through Microsoft Graph (read-only).
+"""Microsoft OneDrive and SharePoint document libraries, through Microsoft Graph.
+
+Read-only, except `save()` (M11): it uploads files the user saves through Eridi, only to
+storage with Save on, with a separate write token, and never replaces a file unless asked.
 
 A drive's file list is kept up to date with Graph's delta query (`/drives/{id}/root/delta`):
 the first listing pages through every item once, later ones ask only for what changed
@@ -22,7 +25,13 @@ from urllib.parse import quote
 import httpx
 import pathspec
 
-from eridi.connectors.base import ConnectorError, RemoteChange, RemoteFile, RemoteVersion
+from eridi.connectors.base import (
+    ConnectorError,
+    NameTakenInStorageError,
+    RemoteChange,
+    RemoteFile,
+    RemoteVersion,
+)
 from eridi.connectors.local import DEFAULT_IGNORES
 
 log = logging.getLogger(__name__)
@@ -35,6 +44,10 @@ RETRY_STATUSES = (429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 6
 MAX_WAIT = 300.0
 """Never wait longer than this for one retry, whatever `Retry-After` says."""
+SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024
+"""Graph takes files up to 4 MB in one request; larger ones go through an upload session."""
+UPLOAD_CHUNK = 10 * 320 * 1024
+"""Upload-session chunks must be multiples of 320 KiB."""
 SAVE_EVERY_PAGES = 20
 """While listing a large drive, save progress this often, so an interrupted first scan
 picks up where it stopped."""
@@ -85,12 +98,30 @@ class GraphClient:
     def request(self, path_or_url: str, params: dict[str, str] | None = None) -> httpx.Response:
         """GET with the token. Throttling (429), busy servers (5xx) and dropped connections
         are retried, waiting as long as Microsoft's `Retry-After` asks (else 1, 2, 4… s)."""
+        return self.send("GET", path_or_url, params=params)
+
+    def send(
+        self,
+        method: str,
+        path_or_url: str,
+        *,
+        params: dict[str, str] | None = None,
+        content: bytes | None = None,
+        json: Any = None,
+        headers: dict[str, str] | None = None,
+        auth: bool = True,
+    ) -> httpx.Response:
+        """Any request, retried like `request`. `auth=False` sends no token (upload-session
+        URLs are pre-authorized, and must not receive it)."""
         url = self._url(path_or_url)
         for attempt in range(1, self.max_attempts + 1):
             last = attempt == self.max_attempts
+            sent = dict(headers or {})
+            if auth:
+                sent["Authorization"] = f"Bearer {self._token()}"
             try:
-                response = self.http.get(
-                    url, params=params, headers={"Authorization": f"Bearer {self._token()}"}
+                response = self.http.request(
+                    method, url, params=params, content=content, json=json, headers=sent
                 )
             except httpx.TransportError as exc:
                 if last:
@@ -342,7 +373,10 @@ class MsGraphConnector:
         *,
         cache: DeltaCache | None = None,
         ignore: Iterable[str] = (),
+        writer: GraphClient | None = None,
     ) -> None:
+        """`writer` is a client with a write token; without it `save()` refuses."""
+        self.writer = writer
         self._root_id = root_id
         self.drive_id = drive_id
         self.client = client
@@ -481,8 +515,78 @@ class MsGraphConnector:
             raise ConnectorError(f"{path} isn't in this Microsoft drive any more.")
         return item_id
 
+    def _by_path_url(self, path: str) -> str:
+        return f"{self._base}/root:/{quote(path, safe='/')}:"
+
     def open_bytes(self, path: str) -> bytes:
-        return self.client.get_bytes(f"{self._base}/items/{self._item_id(path)}/content")
+        try:
+            item_id = self._item_id(path)
+        except ConnectorError as missing:  # e.g. just saved, not listed yet: try by path
+            try:
+                return self.client.get_bytes(f"{self._by_path_url(path)}/content")
+            except GraphError as exc:
+                if exc.status == 404:
+                    raise missing from None
+                raise
+        return self.client.get_bytes(f"{self._base}/items/{item_id}/content")
+
+    def exists(self, path: str) -> bool:
+        try:
+            self.client.get(self._by_path_url(path))
+        except GraphError as exc:
+            if exc.status == 404:
+                return False
+            raise
+        return True
+
+    def save(self, path: str, data: bytes, *, overwrite: bool = False) -> RemoteFile:
+        """Upload a file. Without `overwrite`, an existing file is left alone and
+        `NameTakenInStorageError` is raised; with it, Microsoft keeps the old one as a
+        version."""
+        if self.writer is None:
+            raise ConnectorError("Saving to this Microsoft storage is off.")
+        behavior = "replace" if overwrite else "fail"
+        target = self._by_path_url(path)
+        try:
+            if len(data) <= SIMPLE_UPLOAD_MAX:
+                response = self.writer.send(
+                    "PUT", f"{target}/content", content=data,
+                    params={"@microsoft.graph.conflictBehavior": behavior},
+                    headers={"Content-Type": "application/octet-stream"},
+                )  # fmt: skip
+            else:
+                response = self._upload_session(target, data, behavior)
+        except GraphError as exc:
+            if exc.status == 409 or exc.code == "nameAlreadyExists":
+                raise NameTakenInStorageError(f"{path} already exists in Microsoft.") from None
+            raise
+        item = response.json()
+        self._by_path = None
+        return RemoteFile(
+            path=path,
+            size=int(item.get("size") or len(data)),
+            modified=_timestamp(item.get("lastModifiedDateTime")),
+        )
+
+    def _upload_session(self, target: str, data: bytes, behavior: str) -> httpx.Response:
+        assert self.writer is not None  # noqa: S101 - checked by save()
+        session = self.writer.send(
+            "POST", f"{target}/createUploadSession",
+            json={"item": {"@microsoft.graph.conflictBehavior": behavior}},
+        ).json()  # fmt: skip
+        url = str(session.get("uploadUrl") or "")
+        if not url.startswith("https://"):
+            raise GraphError("Microsoft didn't start the upload. Try again later.")
+        response: httpx.Response | None = None
+        total = len(data)
+        for start in range(0, total, UPLOAD_CHUNK):
+            chunk = data[start : start + UPLOAD_CHUNK]
+            response = self.writer.send(
+                "PUT", url, content=chunk, auth=False,
+                headers={"Content-Range": f"bytes {start}-{start + len(chunk) - 1}/{total}"},
+            )  # fmt: skip
+        assert response is not None  # noqa: S101 - data is over 4 MB
+        return response
 
     def versions(self, path: str) -> list[RemoteVersion]:
         """Earlier versions Microsoft keeps, newest first (the current one is left out)."""

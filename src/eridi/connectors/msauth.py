@@ -3,7 +3,9 @@
 Eridi is a "public client": it has no secret, so nothing on a server can sign in as it.
 Sign-in uses the authorization code flow with PKCE and a loopback redirect
 (`http://localhost`, opened in the user's browser); the device-code flow is the fallback
-for computers where a browser can't be opened. Scopes are read-only.
+for computers where a browser can't be opened. Scopes are read-only. Write scopes
+(`WRITE_SCOPES`) are asked for separately, only when the user turns Save on for Microsoft
+storage (M11), so people who only search never grant Eridi write access.
 
 Tokens are kept by MSAL in a token cache that Eridi stores in the OS keychain (`keyring`),
 never in a file or a log. Windows' Credential Manager limits each entry's size, so the
@@ -23,6 +25,8 @@ from eridi.connectors.base import ConnectorError
 
 SCOPES = ["Files.Read.All", "Sites.Read.All", "User.Read"]
 """Read-only. MSAL adds `offline_access` (to stay signed in), `openid` and `profile`."""
+WRITE_SCOPES = ["Files.ReadWrite.All", "Sites.ReadWrite.All", "User.Read"]
+"""Only for saving files the user saves through Eridi (asked for when Save is turned on)."""
 AUTHORITY = "https://login.microsoftonline.com/common"
 """Work and school accounts from any organization, and personal Microsoft accounts."""
 ENV_CLIENT_ID = "ERIDI_MS_CLIENT_ID"
@@ -49,6 +53,18 @@ class SignInNeededError(MicrosoftAuthError):
         super().__init__(
             f"Eridi is no longer signed in to Microsoft{account}. "
             "Sign in again with `eridi storage add-microsoft`."
+        )
+
+
+class WriteAccessNeededError(MicrosoftAuthError):
+    """Saving needs the user to allow Eridi to write (one more consent screen)."""
+
+    def __init__(self, who: str = "") -> None:
+        account = f" as {who}" if who else ""
+        super().__init__(
+            f"To save to Microsoft{account}, allow Eridi to write there: turn Save on for the "
+            "storage (`eridi storage set <storage> --save`, or on the Storage page) and "
+            "approve the sign-in."
         )
 
 
@@ -223,20 +239,63 @@ class MicrosoftAuth:
             for a in self.app.get_accounts()
         ]
 
-    def token(self, account_id: str) -> str:
-        """A current access token for the account, refreshed silently when needed."""
-        account = next(
+    def allow_saving(
+        self,
+        account_id: str,
+        *,
+        device_code: bool = False,
+        show: Callable[[str], None] = print,
+        timeout: int = 300,
+    ) -> MicrosoftAccount:
+        """Ask the user to let Eridi write (for saving files). Signs in again if needed."""
+        known = self._find(account_id)
+        hint = known.get("username") if known else None
+        if device_code:
+            flow = self.app.initiate_device_flow(scopes=WRITE_SCOPES)
+            if "user_code" not in flow:
+                self._check(flow)
+            show(str(flow["message"]))
+            result = self.app.acquire_token_by_device_flow(flow)
+        else:
+            try:
+                result = self.app.acquire_token_interactive(
+                    WRITE_SCOPES, login_hint=hint, timeout=timeout
+                )
+            except Exception as exc:
+                raise MicrosoftAuthError(
+                    f"Couldn't open the Microsoft sign-in page ({exc}). Use a code instead "
+                    "(`--device-code`)."
+                ) from None
+        account = self._account(self._check(result))
+        if account.id != account_id:
+            raise MicrosoftAuthError(
+                f"You signed in as {account.username}, but this storage is read as "
+                f"{hint or 'another account'}. Sign in with that account."
+            )
+        return account
+
+    def _find(self, account_id: str) -> dict[str, Any] | None:
+        return next(
             (a for a in self.app.get_accounts() if a.get("home_account_id") == account_id), None
         )
+
+    def token(self, account_id: str, *, write: bool = False) -> str:
+        """A current access token for the account, refreshed silently when needed.
+        `write=True` asks for the write scopes, which the user grants with `allow_saving`."""
+        account = self._find(account_id)
         if account is None:
             raise SignInNeededError()
-        result = self.app.acquire_token_silent(SCOPES, account=account)
+        result = self.app.acquire_token_silent(WRITE_SCOPES if write else SCOPES, account=account)
+        if not result and write:
+            raise WriteAccessNeededError(account.get("username", ""))
         if not result:
             raise SignInNeededError(account.get("username", ""))
         if "access_token" not in result:
             description = str(result.get("error_description") or "")
             if any(code in description for code in _APPROVAL_CODES):
                 raise ApprovalRequiredError(self.consent_url(), description)
+            if write:
+                raise WriteAccessNeededError(account.get("username", ""))
             raise SignInNeededError(account.get("username", ""))
         self._persist()
         return str(result["access_token"])
