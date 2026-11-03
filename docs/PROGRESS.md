@@ -6,7 +6,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 ## Phase A — v0
 - [ ] **M0 Foundations**: [x] 1 scaffold · [x] 2 tooling · [x] 3 CI · [x] 4 open-source files · [x] 5 core helpers · [x] 6 fixture builder · [ ] Human check: CI green on GitHub; tests pass on your Mac and a Windows machine
 - [ ] **M1 Record store**: [x] 1 schema · [x] 2 store · [x] 3 concurrency · [x] 4 views · [x] 5 config · [ ] Human check: record folder in a real sync folder, two computers
-- [ ] **M2 Local connector and extraction**: [ ] 1 protocol · [ ] 2 local connector · [ ] 3 extractors
+- [ ] **M2 Local connector and extraction**: [x] 1 protocol · [ ] 2 local connector · [ ] 3 extractors
 - [ ] **M3 Index and search**: [ ] 1 db · [ ] 2 files · [ ] 3 records · [ ] 4 search · [ ] 5 rebuild
 - [ ] **M4 Scanning, snapshots, changes**: [ ] 1 snapshots · [ ] 2 scanner · [ ] 3 changes/diffs · [ ] 4 service
 - [ ] **M5 CLI**: [ ] 1 commands · [ ] 2 interactive why · [ ] 3 file arguments · [ ] Human check: one week of real use
