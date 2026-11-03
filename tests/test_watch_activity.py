@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from conftest import SampleLab
 from eridi.cli.main import app as cli
 from eridi.core.service import Eridi
-from eridi.core.watch import Watcher
+from eridi.core.watch import RECORD, Watcher
 
 PROTOCOL = "Protocols/Western_blot_blocking_v7.docx"
 
@@ -129,7 +129,7 @@ def test_watcher_records_a_saved_file_within_seconds(lab: Eridi, sample_lab: Sam
     watcher = Watcher(lab, debounce=0.3, on_report=lambda root, r: seen.extend(r.changed))
     watcher.start()
     try:
-        assert watcher.watching == [root_id(lab)]
+        assert watcher.watching == sorted([root_id(lab), RECORD])
         time.sleep(0.5)  # let the OS watch settle
         edit_protocol(sample_lab, "Primary antibody incubation: overnight at 4 °C.")
         assert wait_for(lambda: PROTOCOL in seen), "the save was not noticed"
@@ -146,7 +146,7 @@ def test_watcher_follows_storage_changes(lab: Eridi, tmp_path: Path) -> None:
     try:
         lab.update_root(root_id(lab), search=False)
         watcher._sync_watches()
-        assert watcher.watching == []
+        assert watcher.watching == [RECORD]
     finally:
         watcher.stop()
 

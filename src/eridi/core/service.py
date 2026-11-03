@@ -636,6 +636,17 @@ class Eridi:
             log.warning("Record folder not available: %s", exc)
             return None
 
+    def refresh_record(self) -> list[Entry]:
+        """Read entries that arrived in the record folder (from labmates or other computers)
+        now, and return them oldest first."""
+        with self._lock:
+            report = self._refresh_records(force=True)
+            if report is None or not report.added_ids:
+                return []
+            self.last_activity = utc_now()
+            found = (self._get_entry(i) for i in report.added_ids)
+            return [e for e in found if e is not None]
+
     def _referenced_texts(self) -> set[str]:
         rows = self.conn.execute(
             "SELECT text_sha256 FROM files WHERE text_sha256 IS NOT NULL "

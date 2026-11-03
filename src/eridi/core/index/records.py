@@ -27,6 +27,7 @@ RECONCILE_INTERVAL = timedelta(hours=1)
 class RecordSyncReport:
     full: bool
     added: int = 0
+    added_ids: list[str] = field(default_factory=list)
     removed: int = 0
     problems: list[RecordProblem] = field(default_factory=list)
     newer_version: int = 0
@@ -176,6 +177,7 @@ def sync_records(
         for e in new:
             _insert(conn, e)
         report.added = len(new)
+        report.added_ids = [e.id for e in new]
         if new or report.removed:
             _refresh_states(conn, {e.id for e in new})
         _update_last_id(conn)

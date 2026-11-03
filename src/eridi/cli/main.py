@@ -788,10 +788,26 @@ def watch() -> None:
             for path in scanned.missing:
                 out.print(f"{stamp}  removed {escape(path)}")
 
-        watcher = Watcher(eridi, on_report=report)
+        def arrived(entries: list[Entry]) -> None:
+            stamp = datetime.now().strftime("%H:%M:%S")
+            for entry in entries:
+                about = f" · {escape(entry.subjects[0].path)}" if entry.subjects else ""
+                words = entry.text if len(entry.text) <= 80 else entry.text[:79] + "…"
+                who = escape(entry.author.name)
+                out.print(f"{stamp}  [cyan]{entry.kind}[/cyan]  {who}{about}: {escape(words)}")
+
+        watcher = Watcher(eridi, on_report=report, on_entries=arrived)
         watcher.start()
         names = ", ".join(r.label for r in eridi.list_roots() if r.search)
-        out.print(f"Watching {escape(names)}. Save a file to see it here. Ctrl+C to stop.")
+        out.print(
+            f"Watching {escape(names)} and the record. Save a file to see it here. Ctrl+C to stop."
+        )
+        for key, reason in watcher.polled.items():
+            what = "the record folder" if key == "record" else eridi.root_label(key) or key
+            out.print(
+                f"[yellow]Can't watch {escape(what)}[/yellow] ({escape(reason)}); "
+                "checking it every minute instead."
+            )
         try:
             while True:
                 time.sleep(1)
