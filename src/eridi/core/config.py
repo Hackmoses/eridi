@@ -37,6 +37,8 @@ class Settings:
     """Space for stored text versions; oldest unreferenced ones are removed first."""
     read_online_only_files: bool = False
     """Read files that a sync client keeps only in the cloud (this downloads them)."""
+    scan_interval_minutes: int = 10
+    """How often the app scans in the background while it is open; 0 turns it off."""
 
     @property
     def size_limit_bytes(self) -> int:
@@ -50,6 +52,10 @@ class Config:
     record_folder: Path | None = None
     roots: tuple[Root, ...] = ()
     settings: Settings = field(default_factory=Settings)
+    dismissed_changes: tuple[str, ...] = ()
+    """Keys of detected changes the user chose not to explain (local only, never synced)."""
+    mcp_allow_writes: bool = False
+    """Let AI assistants add notes through the MCP server (written as `author.kind = "agent"`)."""
     extra_unknown: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -92,7 +98,7 @@ def _table(path: Path, data: dict[str, Any], key: str) -> dict[str, Any]:
 
 
 def _parse(path: Path, data: dict[str, Any]) -> Config:
-    known = {"device_id", "user", "record_folder", "roots", "settings"}
+    known = {"device_id", "user", "record_folder", "roots", "settings", "dismissed_changes"}
     device_id = data.get("device_id")
     if device_id is None:
         device_id = new_id("dev")
@@ -124,6 +130,8 @@ def _parse(path: Path, data: dict[str, Any]) -> Config:
     settings = Settings(**values)
     if settings.size_limit_mb <= 0:
         _bad(path, "settings.size_limit_mb", "must be greater than 0")
+    if settings.scan_interval_minutes < 0:
+        _bad(path, "settings.scan_interval_minutes", "must not be negative")
     if settings.snapshot_cap_mb < 0:
         _bad(path, "settings.snapshot_cap_mb", "must not be negative")
 
@@ -147,13 +155,29 @@ def _parse(path: Path, data: dict[str, Any]) -> Config:
     if len(ids) != len(set(ids)):
         _bad(path, "roots", "lists the same storage ID more than once")
 
+    dismissed = _typed(path, "dismissed_changes", data.get("dismissed_changes", []), list, "a list")
+    for i, key in enumerate(dismissed):
+        _typed(path, f"dismissed_changes[{i}]", key, str, "text")
+    mcp = _table(path, data, "mcp")
+    allow_writes = _typed(
+        path, "mcp.allow_writes", mcp.get("allow_writes", False), bool, "true or false"
+    )
+    unknown = {k: v for k, v in data.items() if k not in known}
+    mcp_rest = {k: v for k, v in mcp.items() if k != "allow_writes"}
+    if mcp_rest:
+        unknown["mcp"] = mcp_rest
+    else:
+        unknown.pop("mcp", None)
+
     return Config(
         device_id=device_id,
+        dismissed_changes=tuple(dismissed),
+        mcp_allow_writes=allow_writes,
         user=user,
         record_folder=record_folder,
         roots=tuple(roots),
         settings=settings,
-        extra_unknown={k: v for k, v in data.items() if k not in known},
+        extra_unknown=unknown,
     )
 
 
@@ -187,6 +211,8 @@ def _to_toml(config: Config) -> dict[str, Any]:
     data["user"] = user
     data["settings"] = {f.name: getattr(config.settings, f.name) for f in fields(Settings)}
     data["roots"] = [{f.name: getattr(r, f.name) for f in fields(Root)} for r in config.roots]
+    data["dismissed_changes"] = list(config.dismissed_changes)
+    data["mcp"] = {**data.get("mcp", {}), "allow_writes": config.mcp_allow_writes}
     return data
 
 

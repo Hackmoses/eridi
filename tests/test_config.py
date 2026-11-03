@@ -108,3 +108,23 @@ def test_wrong_values_name_the_key(tmp_path: Path, body: str, key: str) -> None:
         load_config(path)
     assert f"'{key}'" in str(info.value)
     assert str(path) in str(info.value)
+
+
+def test_dismissed_changes_and_mcp_round_trip(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    config = Config(
+        device_id="dev_X",
+        dismissed_changes=("root_A:aaaa:bbbb",),
+        mcp_allow_writes=True,
+        settings=Settings(scan_interval_minutes=0),
+    )
+    save_config(config, path)
+    assert load_config(path) == config
+    assert "allow_writes = true" in path.read_text(encoding="utf-8")
+
+
+def test_mcp_allow_writes_must_be_boolean(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text("[mcp]\nallow_writes = 'yes'\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="'mcp.allow_writes'"):
+        load_config(path)
