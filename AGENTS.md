@@ -88,6 +88,13 @@ tests/          pytest; fixtures build a sample lab folder at test time
 docs/           plan, architecture, record format, progress
 ```
 
+## Guiding principles
+
+- **Make the best decision that will elevate all three: the user experience (UX), developer
+  experience (DX), and agent experience (AX) always, without breaking anything.**
+- **Cut taglines, helper text and secondary labels. If a screen needs them to make sense, fix
+  the layout.**
+
 ## Style
 
 - Python 3.12+, type hints everywhere, `mypy --strict` on `src/`.
