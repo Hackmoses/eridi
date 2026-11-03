@@ -167,3 +167,27 @@ def test_keyring_store_splits_long_caches(memory_keyring: dict[Any, str]) -> Non
     assert memory_keyring[(msauth.KEYRING_SERVICE, f"cache:{CLIENT}:3")] == ""  # blanked
     memory_keyring.pop((msauth.KEYRING_SERVICE, f"cache:{CLIENT}:0"))
     assert store.load() is None  # damaged: treated as signed out
+
+
+def test_no_keychain_is_explained(monkeypatch: pytest.MonkeyPatch) -> None:
+    import keyring
+    import keyring.errors
+
+    def missing(*args: Any) -> None:
+        raise keyring.errors.NoKeyringError("No recommended backend was available.")
+
+    monkeypatch.setattr(keyring, "get_password", missing)
+    with pytest.raises(MicrosoftAuthError, match="keychain"):
+        MicrosoftAuth(CLIENT, app_factory=lambda c, cache: FakeApp(c, cache))
+
+
+def test_offline_token_refresh_is_explained(app: FakeApp) -> None:
+    auth = auth_with(app)
+    auth.sign_in()
+
+    def offline(*args: Any, **kwargs: Any) -> Any:
+        raise ConnectionError("Name or service not known")
+
+    app.acquire_token_silent = offline  # type: ignore[method-assign]
+    with pytest.raises(MicrosoftAuthError, match="internet connection"):
+        auth.token("uid.tid")

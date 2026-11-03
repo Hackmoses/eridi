@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import keyring
+import keyring.errors
 import msal
 
 from eridi.connectors.base import ConnectorError
@@ -94,6 +95,13 @@ class TokenStore(Protocol):
     def save(self, text: str) -> None: ...
 
 
+NO_KEYCHAIN = (
+    "Eridi keeps Microsoft sign-ins in the operating system's keychain, and none is "
+    "available here ({detail}). On Linux, install and unlock a Secret Service keychain "
+    "(for example GNOME Keyring or KWallet), then try again."
+)
+
+
 class KeyringTokenStore:
     """MSAL's serialized cache, split across keychain entries `cache:0`, `cache:1`, …"""
 
@@ -101,6 +109,18 @@ class KeyringTokenStore:
         self.prefix = f"cache:{client}"
 
     def load(self) -> str | None:
+        try:
+            return self._load()
+        except keyring.errors.KeyringError as exc:
+            raise MicrosoftAuthError(NO_KEYCHAIN.format(detail=type(exc).__name__)) from None
+
+    def save(self, text: str) -> None:
+        try:
+            self._save(text)
+        except keyring.errors.KeyringError as exc:
+            raise MicrosoftAuthError(NO_KEYCHAIN.format(detail=type(exc).__name__)) from None
+
+    def _load(self) -> str | None:
         count = keyring.get_password(KEYRING_SERVICE, f"{self.prefix}:count")
         if not count or not count.isdigit():
             return None
@@ -111,7 +131,7 @@ class KeyringTokenStore:
             return None  # half-written: start over rather than guess
         return "".join(p for p in parts if p is not None)
 
-    def save(self, text: str) -> None:
+    def _save(self, text: str) -> None:
         chunks = [text[i : i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
         old = keyring.get_password(KEYRING_SERVICE, f"{self.prefix}:count")
         for i, chunk in enumerate(chunks):
@@ -230,7 +250,13 @@ class MicrosoftAuth:
         )
         if account is None:
             raise SignInNeededError()
-        result = self.app.acquire_token_silent(SCOPES, account=account)
+        try:
+            result = self.app.acquire_token_silent(SCOPES, account=account)
+        except Exception as exc:  # e.g. offline while the token needed refreshing
+            raise MicrosoftAuthError(
+                f"Couldn't reach Microsoft to renew the sign-in ({type(exc).__name__}). "
+                "Check the internet connection; Eridi will try again at the next scan."
+            ) from None
         if not result:
             raise SignInNeededError(account.get("username", ""))
         if "access_token" not in result:

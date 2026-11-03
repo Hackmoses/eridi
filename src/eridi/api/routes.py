@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from eridi.api.microsoft import MicrosoftSignIn
 from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import Guard
+from eridi.connectors.base import ConnectorError
 from eridi.core.changes import Activity, FileDiff, PendingChange
 from eridi.core.config import ConfigError
 from eridi.core.index.search import SearchHit, group_label
@@ -51,7 +52,7 @@ def error(exc: Exception) -> JSONResponse:
     return JSONResponse({"error": str(exc)}, status_code=status)
 
 
-KNOWN_ERRORS = (EridiError, ConfigError, RecordFolderError)
+KNOWN_ERRORS = (EridiError, ConfigError, RecordFolderError, ConnectorError)
 
 
 # --- JSON shapes ---

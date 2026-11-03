@@ -223,7 +223,12 @@ def _drive(data: dict[str, Any], site: str | None = None) -> DriveInfo:
 def list_drives(client: GraphClient) -> list[DriveInfo]:
     """The user's OneDrive, then the document libraries of SharePoint sites they follow."""
     drives = [_drive(client.get("/me/drive"))]
-    for site in client.items("/me/followedSites"):
+    try:
+        sites = list(client.items("/me/followedSites"))
+    except GraphError as exc:  # personal Microsoft accounts have no SharePoint sites
+        log.info("No followed SharePoint sites: %s", exc)
+        sites = []
+    for site in sites:
         site_name = str(site.get("displayName") or site.get("name") or "SharePoint")
         try:
             libraries = list(client.items(f"/sites/{site['id']}/drives"))

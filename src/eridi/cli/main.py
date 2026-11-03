@@ -20,6 +20,7 @@ from rich.markup import escape
 from rich.text import Text
 
 from eridi import __version__
+from eridi.connectors.base import ConnectorError
 from eridi.connectors.msauth import ApprovalRequiredError
 from eridi.connectors.msgraph import DriveInfo, root_id_for
 from eridi.core.changes import Activity, FileDiff, FileStats
@@ -79,7 +80,13 @@ def session() -> Iterator[Eridi]:
     except AmbiguousFileError as exc:
         err_console().print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from None
-    except (EridiError, ConfigError, RecordFolderError, IndexUnavailableError) as exc:
+    except (
+        EridiError,
+        ConfigError,
+        RecordFolderError,
+        IndexUnavailableError,
+        ConnectorError,
+    ) as exc:
         err_console().print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from None
     except KeyboardInterrupt:
@@ -450,7 +457,7 @@ def storage_remove(
 
 
 def folder_label(eridi: Eridi, root_id: str, path: str) -> str:
-    label = eridi.root_label(root_id) or root_id
+    label = eridi.root_label(root_id) or f"{root_id} (not connected on this computer)"
     return f"{label} / {path}" if path else f"{label} (all of it)"
 
 

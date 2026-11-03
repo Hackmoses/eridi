@@ -34,7 +34,8 @@ class RecordSyncReport:
 
 
 def _searchable(entry: Entry, state: str) -> bool:
-    return state == "current" and entry.kind != "tombstone"
+    # Project entries hold no words of their own; projects are listed, not searched.
+    return state == "current" and entry.kind not in ("tombstone", "project")
 
 
 def _fts_values(entry: Entry) -> tuple[str, str, str]:

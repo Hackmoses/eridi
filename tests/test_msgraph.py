@@ -4,6 +4,7 @@ import io
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 from docx import Document
 
@@ -62,6 +63,16 @@ def test_list_drives(graph: FakeGraph) -> None:
         ("b!SmithLabDocs01", "documentLibrary", "Smith Lab"),
         ("b!SmithLabProto02", "documentLibrary", "Smith Lab – Protocols"),
     ]  # the Core Facility site refused access and is skipped
+
+
+def test_list_drives_for_a_personal_account(graph: FakeGraph) -> None:
+    """Personal Microsoft accounts have OneDrive but no SharePoint: Graph refuses
+    /me/followedSites, which must not stop sign-in."""
+    graph.queue(
+        "/me/followedSites",
+        httpx.Response(400, json={"error": {"code": "BadRequest", "message": "Not supported"}}),
+    )
+    assert [d.label for d in list_drives(graph.client())] == ["OneDrive"]
 
 
 def test_listing_pages_through_delta(graph: FakeGraph) -> None:

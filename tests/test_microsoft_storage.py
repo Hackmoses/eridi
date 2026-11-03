@@ -201,3 +201,19 @@ def test_web_app_explains_it_approval(client: TestClient, auth: FakeAuth) -> Non
     assert status["state"] == "approval"
     assert status["consent_url"] == CONSENT
     assert status["message"].startswith("Your university needs to approve this app.")
+
+
+def test_without_an_app_id_the_terminal_says_what_to_do(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No traceback: the message names the setting to fill in."""
+    from eridi.connectors import msauth
+
+    monkeypatch.delenv(msauth.ENV_CLIENT_ID, raising=False)
+    monkeypatch.setattr(msauth, "DEFAULT_CLIENT_ID", "")
+    runner = CliRunner()
+    runner.invoke(cli, ["init", "--name", "A", "--email", "", "--record-folder", str(tmp_path)])
+    result = runner.invoke(cli, ["storage", "add-microsoft"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output and "no Microsoft app ID" in result.output
+    assert "docs/MICROSOFT.md" in result.output
