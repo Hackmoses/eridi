@@ -370,6 +370,46 @@ function microsoftPanel() {
   return box;
 }
 
+function googlePanel() {
+  const box = el("section", { class: "card google", "aria-labelledby": "gd-h", "aria-live": "polite" });
+  let timer = null;
+  const idle = () => box.replaceChildren(
+    el("h2", { id: "gd-h" }, "Google Drive"),
+    el("div", { class: "actions" }, el("button", { type: "button", onclick: start }, "Add Google Drive")));
+  async function start() {
+    try { await api("/google/sign-in", { method: "POST" }); } catch (error) { showError(box, error); return; }
+    poll();
+  }
+  const poll = async () => {
+    clearTimeout(timer);
+    let s;
+    try { s = await api("/google/sign-in"); } catch (error) { showError(box, error); return; }
+    if (s.state === "waiting") {
+      box.replaceChildren(el("h2", { id: "gd-h" }, "Signing in to Google…"),
+        el("p", {}, "Finish signing in in the browser window that opened."));
+      timer = setTimeout(poll, 1000);
+    } else if (s.state === "done") {
+      box.replaceChildren(el("h2", { id: "gd-h" }, "Signed in as " + s.email),
+        el("ul", { class: "folders" }, s.drives.map((d) => {
+          const add = el("button", { type: "button", disabled: d.connected, onclick: async () => {
+            add.disabled = true;
+            try { await api("/google/storage", { body: { drive_id: d.id } }); renderStorage(); }
+            catch (error) { add.disabled = false; alert(error.message); }
+          } }, d.connected ? "Connected" : "Add");
+          return el("li", {}, el("span", {}, d.label), add);
+        })),
+        el("button", { type: "button", class: "link", onclick: idle }, "Use another account"));
+    } else if (s.state === "error") {
+      box.replaceChildren(el("h2", { id: "gd-h" }, "Google Drive"),
+        el("p", { class: "error", role: "alert" }, s.message),
+        el("button", { type: "button", class: "link", onclick: idle }, "Try again"));
+    } else idle();
+  };
+  idle();
+  poll();
+  return box;
+}
+
 async function allowSave(path, box) {
   try { await api(path + "/allow-save", { body: { device_code: false } }); }
   catch (error) { alert(error.message); return; }
@@ -386,7 +426,7 @@ async function allowSave(path, box) {
 async function renderStorage() {
   main.replaceChildren(el("h1", {}, "Storage"));
   const list = el("div", {});
-  main.append(list, microsoftPanel());
+  main.append(list, microsoftPanel(), googlePanel());
   try {
     const data = await api("/storage");
     if (!data.storage.length) {
@@ -424,7 +464,7 @@ async function renderStorage() {
         } });
       return el("li", { class: "card" },
         el("h2", {}, root.label),
-        el("div", { class: "meta" }, root.kind === "msgraph" ? "Microsoft" : root.location),
+        el("div", { class: "meta" }, { msgraph: "Microsoft", gdrive: "Google Drive" }[root.kind] || root.location),
         el("div", { class: "actions" }, toggle("search", "Search"), toggle("save", "Save"),
           el("label", { for: approvedId, class: "switch" }, approved, " Approved for patient data"), mark));
     })));

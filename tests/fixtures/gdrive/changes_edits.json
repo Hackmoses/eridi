@@ -1,0 +1,72 @@
+{
+  "changes": [
+    {
+      "file": {
+        "id": "DOC1",
+        "mimeType": "application/vnd.google-apps.document",
+        "modifiedTime": "2026-11-02T10:00:00.000Z",
+        "name": "Cell culture SOP",
+        "parents": [
+          "FOLDER1"
+        ],
+        "trashed": false
+      },
+      "fileId": "DOC1",
+      "kind": "drive#change",
+      "removed": false
+    },
+    {
+      "file": {
+        "id": "FOLDER1",
+        "mimeType": "application/vnd.google-apps.folder",
+        "modifiedTime": "2026-11-02T10:00:00.000Z",
+        "name": "Protocols",
+        "parents": [
+          "ROOT0"
+        ],
+        "trashed": false
+      },
+      "fileId": "FOLDER1",
+      "kind": "drive#change",
+      "removed": false
+    },
+    {
+      "file": {
+        "id": "SHEET1",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "modifiedTime": "2026-11-02T10:00:00.000Z",
+        "name": "Antibody lots",
+        "parents": [
+          "ROOT0"
+        ],
+        "trashed": true
+      },
+      "fileId": "SHEET1",
+      "kind": "drive#change",
+      "removed": false
+    },
+    {
+      "fileId": "FILE1",
+      "kind": "drive#change",
+      "removed": true
+    },
+    {
+      "file": {
+        "id": "FILE2",
+        "mimeType": "text/plain",
+        "modifiedTime": "2026-11-02T11:00:00.000Z",
+        "name": "gel_2026-11-02.txt",
+        "parents": [
+          "FOLDER1"
+        ],
+        "size": "30",
+        "trashed": false
+      },
+      "fileId": "FILE2",
+      "kind": "drive#change",
+      "removed": false
+    }
+  ],
+  "kind": "drive#changeList",
+  "newStartPageToken": "101"
+}

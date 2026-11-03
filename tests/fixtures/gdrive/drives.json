@@ -1,0 +1,10 @@
+{
+  "drives": [
+    {
+      "id": "0ASmithLabShared",
+      "kind": "drive#drive",
+      "name": "Smith Lab Shared"
+    }
+  ],
+  "kind": "drive#driveList"
+}

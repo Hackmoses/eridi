@@ -1,0 +1,36 @@
+{
+  "files": [
+    {
+      "id": "FOLDER1",
+      "mimeType": "application/vnd.google-apps.folder",
+      "modifiedTime": "2026-10-01T09:00:00.000Z",
+      "name": "Protocols 2026",
+      "parents": [
+        "ROOT0"
+      ],
+      "trashed": false
+    },
+    {
+      "id": "DOC1",
+      "mimeType": "application/vnd.google-apps.document",
+      "modifiedTime": "2026-10-20T10:00:00.000Z",
+      "name": "Cell culture SOP",
+      "parents": [
+        "FOLDER1"
+      ],
+      "trashed": false
+    },
+    {
+      "id": "SHEET1",
+      "mimeType": "application/vnd.google-apps.spreadsheet",
+      "modifiedTime": "2026-10-21T10:00:00.000Z",
+      "name": "Antibody lots",
+      "parents": [
+        "ROOT0"
+      ],
+      "trashed": false
+    }
+  ],
+  "kind": "drive#fileList",
+  "nextPageToken": "p2"
+}

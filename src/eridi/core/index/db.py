@@ -9,7 +9,7 @@ from pathlib import Path
 
 from eridi.core.paths import app_home
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 INDEX_NAME = "index.sqlite"
 
 # Porter stemming so "blocking" finds "block"; diacritics folded so "Farbung" finds "Färbung".
@@ -103,6 +103,7 @@ CREATE TABLE cloud_items (
     size INTEGER NOT NULL,
     modified REAL NOT NULL,
     is_root INTEGER NOT NULL,
+    mime TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (root_id, item_id)
 );
 CREATE TABLE project_roots (

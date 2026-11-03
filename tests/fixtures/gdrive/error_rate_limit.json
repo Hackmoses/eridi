@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": 403,
+    "errors": [
+      {
+        "domain": "usageLimits",
+        "message": "Rate Limit Exceeded",
+        "reason": "userRateLimitExceeded"
+      }
+    ],
+    "message": "Rate Limit Exceeded"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "files": [
+    {
+      "id": "FILE1",
+      "mimeType": "text/markdown",
+      "modifiedTime": "2026-10-14T16:00:00.000Z",
+      "name": "lab_meeting_2026-10-14.md",
+      "parents": [
+        "ROOT0"
+      ],
+      "size": "64",
+      "trashed": false
+    },
+    {
+      "id": "FORM1",
+      "mimeType": "application/vnd.google-apps.form",
+      "modifiedTime": "2026-10-02T10:00:00.000Z",
+      "name": "Sign-up",
+      "parents": [
+        "ROOT0"
+      ],
+      "trashed": false
+    },
+    {
+      "id": "SC1",
+      "mimeType": "application/vnd.google-apps.shortcut",
+      "modifiedTime": "2026-10-02T10:00:00.000Z",
+      "name": "Shortcut to someone's folder",
+      "parents": [
+        "ROOT0"
+      ],
+      "trashed": false
+    },
+    {
+      "id": "SHARED1",
+      "mimeType": "application/pdf",
+      "modifiedTime": "2026-10-02T10:00:00.000Z",
+      "name": "Shared with me.pdf",
+      "parents": [
+        "SOMEONE_ELSES_FOLDER"
+      ],
+      "size": "100",
+      "trashed": false
+    },
+    {
+      "id": "SLASH1",
+      "mimeType": "text/plain",
+      "modifiedTime": "2026-10-03T10:00:00.000Z",
+      "name": "WB 1/2 results.txt",
+      "parents": [
+        "FOLDER1"
+      ],
+      "size": "12",
+      "trashed": false
+    }
+  ],
+  "kind": "drive#fileList"
+}

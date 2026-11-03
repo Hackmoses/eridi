@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from eridi.api.google import GoogleSignIn
 from eridi.api.microsoft import MicrosoftSignIn
 from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import Guard
@@ -611,6 +612,39 @@ def cancel_save(request: Request, job_id: str) -> Any:
         return save_json(eridi, eridi.cancel_save(job_id))
     except KNOWN_ERRORS as exc:
         return error(exc)
+
+
+def _google(request: Request) -> GoogleSignIn:
+    flow: GoogleSignIn = request.app.state.google
+    return flow
+
+
+@router.get("/google/sign-in")
+def google_status(request: Request) -> Any:
+    return _google(request).as_json()
+
+
+@router.post("/google/sign-in")
+def google_sign_in(request: Request) -> Any:
+    flow = _google(request)
+    started = flow.start()
+    return JSONResponse({**flow.as_json(), "started": started}, status_code=202)
+
+
+@router.post("/google/storage")
+def add_google_storage(request: Request, body: MicrosoftDriveIn) -> Any:
+    eridi = _eridi(request)
+    flow = _google(request)
+    status = flow.as_json()
+    drive = flow.drive(body.drive_id)
+    if status["state"] != "done" or drive is None:
+        return error(EridiError("Sign in to Google first, then choose a drive."))
+    try:
+        root = eridi.add_google_root(status["account_id"], drive, body.label)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    _scanner(request).request()
+    return JSONResponse(root_json(root, None), status_code=201)
 
 
 @router.post("/scan")

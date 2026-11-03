@@ -22,6 +22,12 @@ from eridi.connectors.base import (
     NameTakenInStorageError,
     SavingConnector,
 )
+from eridi.connectors.gauth import GoogleAccount, GoogleAuth
+from eridi.connectors.gdrive import DriveClient, GDriveConnector, stub_doc_id, whoami
+from eridi.connectors.gdrive import DriveInfo as GoogleDriveInfo
+from eridi.connectors.gdrive import list_drives as list_google_drives
+from eridi.connectors.gdrive import root_id_for as google_root_id_for
+from eridi.connectors.http import TokenProvider
 from eridi.connectors.local import read_root_marker, write_root_marker
 from eridi.connectors.msauth import MicrosoftAccount, MicrosoftAuth, WriteAccessNeededError
 from eridi.connectors.msgraph import (
@@ -31,6 +37,7 @@ from eridi.connectors.msgraph import (
     list_drives,
     root_id_for,
 )
+from eridi.connectors.tree import item_paths
 from eridi.core import changes as changes_module
 from eridi.core.changes import (
     BASELINE_PREFIX,
@@ -232,6 +239,8 @@ class Eridi:
         self._store: RecordStore | None = None
         self._microsoft: MicrosoftAuth | None = None
         self.graph_client_factory: Callable[[Callable[[], str]], GraphClient] = GraphClient
+        self._google: GoogleAuth | None = None
+        self.drive_client_factory: Callable[[TokenProvider], DriveClient] = DriveClient
         self._last_refresh = 0.0
         self.outbox = Outbox()
         self._outbox_lock = threading.Lock()
@@ -561,6 +570,15 @@ class Eridi:
     def connector(self, root: Root) -> Connector:
         if root.kind == "msgraph":
             return self._graph_connector(root)
+        if root.kind == "gdrive":
+            if not root.account:
+                raise ConnectorError(
+                    f"{root.label!r} has no Google account. Remove it and add it again with "
+                    "`eridi storage add-google`."
+                )
+            return GDriveConnector(
+                root.id, root.location, self._drive(root.account), cache=self._delta_cache()
+            )
         return connector_for(root, self._config.settings, ignore=self._own_folders_ignored(root))
 
     # --- Microsoft OneDrive and SharePoint ---
@@ -665,6 +683,110 @@ class Eridi:
             with self.conn:
                 upsert_root(self.conn, root)
             return root
+
+    # --- Google Drive (M12) ---
+
+    @property
+    def google(self) -> GoogleAuth:
+        """Google sign-in (created on first use; tests may replace it)."""
+        if self._google is None:
+            s = self._config.settings
+            self._google = GoogleAuth(s.google_client_id, s.google_client_secret)
+        return self._google
+
+    @google.setter
+    def google(self, auth: GoogleAuth) -> None:
+        self._google = auth
+
+    def _drive(self, account_id: str) -> DriveClient:
+        auth = self.google
+        return self.drive_client_factory(lambda: auth.token(account_id))
+
+    def google_sign_in(
+        self, *, show: Callable[[str], None] = print
+    ) -> tuple[GoogleAccount, list[GoogleDriveInfo]]:
+        """Sign in to Google; return the account and its drives (My Drive, shared drives)."""
+
+        def identify(token: str) -> GoogleAccount:
+            permission_id, email = whoami(self.drive_client_factory(lambda: token))
+            if not permission_id:
+                raise EridiError("Google didn't say who signed in. Try again.")
+            return GoogleAccount(permission_id, email)
+
+        account = self.google.sign_in(identify, show=show)
+        return account, self.google_drives(account.id)
+
+    def google_drives(self, account_id: str) -> list[GoogleDriveInfo]:
+        return list_google_drives(self._drive(account_id))
+
+    def add_google_root(
+        self,
+        account_id: str,
+        drive: GoogleDriveInfo | str,
+        label: str | None = None,
+        *,
+        search: bool = True,
+    ) -> Root:
+        """Connect My Drive or a shared drive. Nothing is downloaded until a scan."""
+        if isinstance(drive, str):
+            found = next((d for d in self.google_drives(account_id) if d.id == drive), None)
+            if found is None:
+                raise EridiError(f"No Google drive you can open has ID {drive!r}.")
+            drive = found
+        with self._lock:
+            root_id = google_root_id_for(drive.id)
+            existing = self._config.root(root_id)
+            if existing is not None:
+                raise EridiError(f"{drive.label} is already connected as {existing.label!r}.")
+            root = Root(
+                root_id, (label or drive.label).strip() or drive.label, drive.location,
+                kind="gdrive", search=search, account=account_id,
+            )  # fmt: skip
+            self._save(self._config.with_root(root))
+            with self.conn:
+                upsert_root(self.conn, root)
+            return root
+
+    def _google_status(self, root: Root) -> tuple[str, str]:
+        try:
+            accounts = {a.id: a.email for a in self.google.accounts()}
+        except ConnectorError as exc:
+            return "error", str(exc)
+        if root.account not in accounts:
+            return "warning", (
+                "Not signed in to Google on this computer. Sign in again with "
+                "`eridi storage add-google`."
+            )
+        state = "search on" if root.search else "search off"
+        return "ok", f"Google Drive, as {accounts[root.account]} ({state})."
+
+    def resolve_google_stub(self, file: FileInfo) -> FileInfo | None:
+        """The real document for a `.gdoc`/`.gsheet`/`.gslides` shortcut in a synced folder,
+        if it is in a connected Google drive."""
+        if file.ext not in (".gdoc", ".gsheet", ".gslides", ".gdraw", ".gform"):
+            return None
+        root = self._config.root(file.root_id)
+        if root is None or root.kind != "local":
+            return None
+        try:
+            doc_id = stub_doc_id(self.connector(root).open_bytes(file.path))
+        except ConnectorError:
+            return None
+        if doc_id is None:
+            return None
+        google_roots = {r.id for r in self._config.roots if r.kind == "gdrive"}
+        rows = self.conn.execute(
+            "SELECT root_id FROM cloud_items WHERE item_id = ?", (doc_id,)
+        ).fetchall()
+        cache = self._delta_cache()
+        for (root_id,) in rows:
+            if root_id not in google_roots:
+                continue
+            path = item_paths(cache.load(root_id)[1]).get(doc_id)
+            found = get_file(self.conn, root_id, path) if path else None
+            if found is not None:
+                return found
+        return None
 
     # --- saving through the outbox (M11) ---
 
@@ -1209,6 +1331,12 @@ class Eridi:
             return self._resolve_file(ref)
 
     def _resolve_file(self, ref: str) -> FileInfo:
+        """Find a file; a Google shortcut in a synced folder resolves to the real document
+        when that is in a connected Google drive."""
+        found = self._find_file(ref)
+        return self.resolve_google_stub(found) or found
+
+    def _find_file(self, ref: str) -> FileInfo:
         ref = ref.strip()
         if not ref:
             raise FileNotFoundInIndexError(ref)
@@ -1568,6 +1696,9 @@ class Eridi:
                 location = Path(root.location)
                 if root.kind == "msgraph":
                     report.add(f"Storage {root.label!r}", *self._microsoft_status(root))
+                    continue
+                if root.kind == "gdrive":
+                    report.add(f"Storage {root.label!r}", *self._google_status(root))
                     continue
                 if root.kind == "local" and not location.is_dir():
                     report.add(

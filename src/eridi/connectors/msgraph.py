@@ -16,12 +16,10 @@ Version history comes from `/items/{id}/versions`.
 import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 from urllib.parse import quote
 
 import httpx
-import pathspec
 
 from eridi.connectors.base import (
     ConnectorError,
@@ -31,9 +29,24 @@ from eridi.connectors.base import (
     RemoteVersion,
 )
 from eridi.connectors.http import MAX_WAIT, TIMEOUT, ApiClient, ApiError, TokenProvider
-from eridi.connectors.local import DEFAULT_IGNORES
+from eridi.connectors.tree import (
+    CloudItem,
+    DeltaCache,
+    MemoryDeltaCache,
+    TreeConnector,
+    iso_timestamp,
+    item_paths,
+)
 
-__all__ = ["MAX_WAIT", "TIMEOUT", "TokenProvider"]
+__all__ = [
+    "MAX_WAIT",
+    "TIMEOUT",
+    "CloudItem",
+    "DeltaCache",
+    "MemoryDeltaCache",
+    "TokenProvider",
+    "item_paths",
+]
 
 log = logging.getLogger(__name__)
 
@@ -185,53 +198,6 @@ def list_drives(client: GraphClient) -> list[DriveInfo]:
 # --- the item tree and its cache ---
 
 
-@dataclass(frozen=True)
-class CloudItem:
-    id: str
-    parent_id: str | None
-    name: str
-    is_folder: bool
-    size: int = 0
-    modified: float = 0.0
-    is_root: bool = False
-
-
-class DeltaCache(Protocol):
-    """Where a drive's item tree and delta cursor are kept between scans."""
-
-    def load(self, root_id: str) -> tuple[str | None, dict[str, CloudItem]]: ...
-
-    def save(
-        self, root_id: str, cursor: str, upserts: list[CloudItem], removed: list[str], *,
-        reset: bool,
-    ) -> None: ...  # fmt: skip
-
-
-class MemoryDeltaCache:
-    def __init__(self) -> None:
-        self.data: dict[str, tuple[str | None, dict[str, CloudItem]]] = {}
-
-    def load(self, root_id: str) -> tuple[str | None, dict[str, CloudItem]]:
-        cursor, items = self.data.get(root_id, (None, {}))
-        return cursor, dict(items)
-
-    def save(
-        self, root_id: str, cursor: str, upserts: list[CloudItem], removed: list[str], *,
-        reset: bool,
-    ) -> None:  # fmt: skip
-        _, items = (None, {}) if reset else self.load(root_id)
-        for item_id in removed:
-            items.pop(item_id, None)
-        items.update({i.id: i for i in upserts})
-        self.data[root_id] = (cursor, items)
-
-
-def _timestamp(value: Any) -> float:
-    if not isinstance(value, str) or not value:
-        return 0.0
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-
-
 def _item(data: dict[str, Any]) -> CloudItem | None:
     """A delta or listing item; None for things that aren't files or folders we can read
     (OneNote notebooks and other packages, items shared from other drives)."""
@@ -244,43 +210,17 @@ def _item(data: dict[str, Any]) -> CloudItem | None:
         name=str(data.get("name", "")),
         is_folder="folder" in data or "root" in data,
         size=int(data.get("size") or 0),
-        modified=_timestamp(data.get("lastModifiedDateTime")),
+        modified=iso_timestamp(data.get("lastModifiedDateTime")),
         is_root="root" in data,
     )
-
-
-def _paths(items: dict[str, CloudItem]) -> dict[str, str]:
-    """Item ID → path relative to the drive root, for every item that reaches the root."""
-    out: dict[str, str] = {}
-    missing = object()
-
-    def path_of(item_id: str, depth: int = 0) -> str | None:
-        known = out.get(item_id, missing)
-        if known is not missing:
-            return known  # type: ignore[return-value]
-        item = items.get(item_id)
-        if item is None or depth > 200:
-            return None
-        if item.is_root:
-            out[item_id] = ""
-            return ""
-        parent = path_of(item.parent_id, depth + 1) if item.parent_id else None
-        if parent is None:
-            return None  # an orphan: its folder was deleted or not delivered yet
-        path = f"{parent}/{item.name}" if parent else item.name
-        out[item_id] = path
-        return path
-
-    for item_id in items:
-        path_of(item_id)
-    return {k: v for k, v in out.items() if v}
 
 
 # --- the connector ---
 
 
-class MsGraphConnector:
+class MsGraphConnector(TreeConnector):
     kind = "msgraph"
+    missing_message = "{path} isn't in this Microsoft drive any more."
 
     def __init__(
         self,
@@ -293,27 +233,14 @@ class MsGraphConnector:
         writer: GraphClient | None = None,
     ) -> None:
         """`writer` is a client with a write token; without it `save()` refuses."""
+        super().__init__(root_id, cache=cache, ignore=ignore)
         self.writer = writer
-        self._root_id = root_id
         self.drive_id = drive_id
         self.client = client
-        self.cache: DeltaCache = cache or MemoryDeltaCache()
-        self._ignore = pathspec.GitIgnoreSpec.from_lines([*DEFAULT_IGNORES, *ignore])
-        self._items: dict[str, CloudItem] | None = None
-        self._cursor: str | None = None
-        self._by_path: dict[str, str] | None = None
-
-    def root_id(self) -> str:
-        return self._root_id
 
     @property
     def _base(self) -> str:
         return f"/drives/{quote(self.drive_id, safe='!')}"
-
-    def _load(self) -> dict[str, CloudItem]:
-        if self._items is None:
-            self._cursor, self._items = self.cache.load(self._root_id)
-        return self._items
 
     def _delta(self, cursor: str | None) -> tuple[list[CloudItem], list[str], str]:
         """Changed and deleted item IDs since `cursor` (everything when None)."""
@@ -385,53 +312,6 @@ class MsGraphConnector:
                 return touched
         raise GraphError("Microsoft didn't finish listing the drive. Try again later.")
 
-    def _files(self, items: dict[str, CloudItem]) -> dict[str, str]:
-        """Item ID → path, for the files a scan should see."""
-        return {
-            i: p for i, p in _paths(items).items() if not items[i].is_folder and self._wanted(p)
-        }
-
-    def _changes(
-        self, before: dict[str, str], items: dict[str, CloudItem], touched: set[str]
-    ) -> list[RemoteChange]:
-        after = self._files(items)
-        changes = [
-            RemoteChange(path, "removed")
-            for item_id, path in before.items()
-            if after.get(item_id) != path
-        ]
-        for item_id, path in after.items():
-            remote = self._remote(items[item_id], path)
-            if before.get(item_id) != path:
-                changes.append(RemoteChange(path, "added", remote))
-            elif item_id in touched:
-                changes.append(RemoteChange(path, "modified", remote))
-        return changes
-
-    def _wanted(self, path: str) -> bool:
-        return not self._ignore.match_file(path)
-
-    @staticmethod
-    def _remote(item: CloudItem, path: str) -> RemoteFile:
-        return RemoteFile(path=path, size=item.size, modified=item.modified)
-
-    def list_files(self) -> Iterator[RemoteFile]:
-        self.sync()
-        items = self._load()
-        for item_id, path in sorted(self._files(items).items(), key=lambda kv: kv[1]):
-            yield self._remote(items[item_id], path)
-
-    def _item_id(self, path: str) -> str:
-        if self._by_path is None:
-            self._load()
-            if self._cursor is None:
-                self.sync()
-            self._by_path = {p: i for i, p in _paths(self._load()).items()}
-        item_id = self._by_path.get(path)
-        if item_id is None:
-            raise ConnectorError(f"{path} isn't in this Microsoft drive any more.")
-        return item_id
-
     def _by_path_url(self, path: str) -> str:
         return f"{self._base}/root:/{quote(path, safe='/')}:"
 
@@ -482,7 +362,7 @@ class MsGraphConnector:
         return RemoteFile(
             path=path,
             size=int(item.get("size") or len(data)),
-            modified=_timestamp(item.get("lastModifiedDateTime")),
+            modified=iso_timestamp(item.get("lastModifiedDateTime")),
         )
 
     def _upload_session(self, target: str, data: bytes, behavior: str) -> httpx.Response:
@@ -518,7 +398,7 @@ class MsGraphConnector:
             out.append(
                 RemoteVersion(
                     id=str(v["id"]),
-                    modified=_timestamp(v.get("lastModifiedDateTime")),
+                    modified=iso_timestamp(v.get("lastModifiedDateTime")),
                     size=int(size) if size is not None else None,
                     author=str(user) if user else None,
                 )

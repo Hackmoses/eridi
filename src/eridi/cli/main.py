@@ -21,6 +21,8 @@ from rich.text import Text
 
 from eridi import __version__
 from eridi.connectors.base import ConnectorError
+from eridi.connectors.gdrive import DriveInfo as GoogleDriveInfo
+from eridi.connectors.gdrive import root_id_for as google_root_id_for
 from eridi.connectors.msauth import ApprovalRequiredError
 from eridi.connectors.msgraph import DriveInfo, root_id_for
 from eridi.core.changes import Activity, FileDiff, FileStats
@@ -365,7 +367,7 @@ def storage_list() -> None:
         for r in roots:
             search = "search on" if r.search else "search off"
             save = "save on" if r.save else "save off"
-            where = "Microsoft" if r.kind == "msgraph" else r.location
+            where = {"msgraph": "Microsoft", "gdrive": "Google Drive"}.get(r.kind, r.location)
             out.print(f"[bold]{escape(r.label)}[/bold]  {escape(where)}")
             marked = " · marked" if eridi.root_marker(r.id) == r.id else ""
             approved = approved_text(r.approved_labels)
@@ -432,7 +434,44 @@ def storage_add_microsoft(
         out.print("[dim]To add a SharePoint library, follow its site in SharePoint first.[/dim]")
 
 
-def pick_drive(drives: list[DriveInfo], ref: str) -> DriveInfo:
+@storage_app.command("add-google")
+def storage_add_google(
+    drive: Annotated[
+        list[str] | None,
+        typer.Option(help="Drive to add, by name or number from the list; repeat for more."),
+    ] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Add every drive listed.")] = False,
+) -> None:
+    """Connect Google Drive: My Drive and shared drives (read-only)."""
+    with session() as eridi:
+        out = console()
+        account, drives = eridi.google_sign_in(show=lambda message: out.print(escape(message)))
+        connected = {r.id for r in eridi.list_roots()}
+        out.print(f"Signed in as [bold]{escape(account.email)}[/bold].")
+        for n, d in enumerate(drives, start=1):
+            added = "  [dim](connected)[/dim]" if google_root_id_for(d.id) in connected else ""
+            out.print(f"  {n}. {escape(d.label)}{added}")
+        if all_:
+            chosen = drives
+        elif drive:
+            chosen = [pick_drive(drives, ref) for ref in drive]
+        elif sys.stdin.isatty():
+            answer = typer.prompt("Add which (numbers separated by commas, or Enter for none)",
+                                  default="", show_default=False)  # fmt: skip
+            chosen = [pick_drive(drives, ref) for ref in answer.replace(",", " ").split()]
+        else:
+            out.print("Choose with --drive <name or number>, or --all.")
+            return
+        for d in chosen:
+            if google_root_id_for(d.id) in connected:
+                continue
+            root = eridi.add_google_root(account.id, d)
+            out.print(f"Added [bold]{escape(root.label)}[/bold].")
+        if chosen:
+            out.print("Next: eridi scan")
+
+
+def pick_drive[D: (DriveInfo, GoogleDriveInfo)](drives: list[D], ref: str) -> D:
     ref = ref.strip()
     if ref.isdigit() and 1 <= int(ref) <= len(drives):
         return drives[int(ref) - 1]

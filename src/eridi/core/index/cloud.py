@@ -9,7 +9,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-from eridi.connectors.msgraph import CloudItem
+from eridi.connectors.tree import CloudItem
 from eridi.core.index.db import get_meta, open_index, set_meta
 
 CURSOR_PREFIX = "delta_cursor:"
@@ -36,12 +36,13 @@ class IndexDeltaCache:
     def load(self, root_id: str) -> tuple[str | None, dict[str, CloudItem]]:
         def read(conn: sqlite3.Connection) -> tuple[str | None, dict[str, CloudItem]]:
             rows = conn.execute(
-                "SELECT item_id, parent_id, name, is_folder, size, modified, is_root "
+                "SELECT item_id, parent_id, name, is_folder, size, modified, is_root, mime "
                 "FROM cloud_items WHERE root_id = ?",
                 (root_id,),
             ).fetchall()
             items = {
-                r[0]: CloudItem(r[0], r[1], r[2], bool(r[3]), r[4], r[5], bool(r[6])) for r in rows
+                r[0]: CloudItem(r[0], r[1], r[2], bool(r[3]), r[4], r[5], bool(r[6]), r[7])
+                for r in rows
             }
             return get_meta(conn, CURSOR_PREFIX + root_id), items
 
@@ -61,13 +62,14 @@ class IndexDeltaCache:
                 )
                 conn.executemany(
                     "INSERT INTO cloud_items (root_id, item_id, parent_id, name, is_folder, "
-                    "size, modified, is_root) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                    "size, modified, is_root, mime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                     "ON CONFLICT (root_id, item_id) DO UPDATE SET parent_id = excluded.parent_id, "
                     "name = excluded.name, is_folder = excluded.is_folder, size = excluded.size, "
-                    "modified = excluded.modified, is_root = excluded.is_root",
+                    "modified = excluded.modified, is_root = excluded.is_root, "
+                    "mime = excluded.mime",
                     [
                         (root_id, i.id, i.parent_id, i.name, int(i.is_folder), i.size, i.modified,
-                         int(i.is_root))
+                         int(i.is_root), i.mime)
                         for i in upserts
                     ],
                 )  # fmt: skip

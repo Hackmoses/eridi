@@ -1,0 +1,15 @@
+{
+  "error": {
+    "code": 400,
+    "errors": [
+      {
+        "domain": "global",
+        "location": "pageToken",
+        "locationType": "parameter",
+        "message": "Invalid Value",
+        "reason": "invalid"
+      }
+    ],
+    "message": "Invalid Value"
+  }
+}
