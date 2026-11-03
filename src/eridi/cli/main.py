@@ -1,6 +1,9 @@
 """The `eridi` command. Every command is a thin wrapper over `eridi.core.service.Eridi`."""
 
 import contextlib
+import json
+import shlex
+import shutil
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -35,8 +38,14 @@ app = typer.Typer(
 )
 storage_app = typer.Typer(help="Connect and list storage folders.", no_args_is_help=True)
 index_app = typer.Typer(help="Maintain the search index.", no_args_is_help=True)
+mcp_app = typer.Typer(
+    help="Let AI assistants (Claude and other MCP clients) use the record. "
+    "With no subcommand, runs the MCP server over stdio.",
+    invoke_without_command=True,
+)
 app.add_typer(storage_app, name="storage")
 app.add_typer(index_app, name="index")
+app.add_typer(mcp_app, name="mcp")
 
 OUTCOME_HELP = f"Did it work? One of: {', '.join(OUTCOMES)}."
 
@@ -486,6 +495,42 @@ def index_rebuild() -> None:
             console().print(
                 f"[yellow]{escape(eridi.root_label(root_id) or root_id)}[/yellow]: {escape(reason)}"
             )
+
+
+def eridi_command() -> list[str]:
+    """How to start this Eridi from another program: the `eridi` executable if it's on the
+    PATH, else this Python with `-m eridi`."""
+    found = shutil.which("eridi")
+    return [str(Path(found).resolve())] if found else [sys.executable, "-m", "eridi"]
+
+
+@mcp_app.callback()
+def mcp_main(ctx: typer.Context) -> None:
+    """Run the MCP server over stdio (an MCP client starts this for you)."""
+    if ctx.invoked_subcommand is None:
+        from eridi.mcp.server import run_stdio
+
+        run_stdio()
+
+
+@mcp_app.command("config")
+def mcp_config() -> None:
+    """Print ready-to-paste settings for Claude Desktop and Claude Code."""
+    command = eridi_command()
+    desktop = {"mcpServers": {"eridi": {"command": command[0], "args": [*command[1:], "mcp"]}}}
+    out = console()
+    out.print("[bold]Claude Desktop[/bold]: add this to claude_desktop_config.json")
+    out.print(json.dumps(desktop, indent=2), markup=False)
+    out.print("")
+    out.print("[bold]Claude Code[/bold]: run")
+    out.print(f"claude mcp add eridi -- {shlex.join([*command, 'mcp'])}", markup=False)
+    out.print("")
+    with session() as eridi:
+        if eridi.config.mcp_allow_writes:
+            out.print("Assistants can add notes (marked as AI-written).")
+        else:
+            out.print("Read-only. To let assistants add notes, set \\[mcp] allow_writes = true in")
+            out.print(str(eridi.config_file), markup=False)
 
 
 @app.command()

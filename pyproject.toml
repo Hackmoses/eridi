@@ -18,6 +18,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "mcp>=2.3",           # official MCP SDK, so AI assistants can use the record
     "openpyxl>=3.1",      # .xlsx text
     "pathspec>=0.12",     # gitignore-style patterns for .eridiignore
     "platformdirs>=4.2",  # correct per-OS app-data locations
