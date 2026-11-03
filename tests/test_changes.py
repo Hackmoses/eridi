@@ -186,3 +186,9 @@ def test_summarize_inserts_and_deletes() -> None:
     assert summarize(["a"], ["a", "Wash 3 × 5 min in TBST"]) == "Added: Wash 3 × 5 min in TBST"
     assert summarize(["a", "Old step"], ["a"]) == "Removed: Old step"
     assert summarize(["a"], ["a"]) is None
+
+
+def test_summary_skips_blank_lines() -> None:
+    assert summarize(["a"], ["a", "", "[Comment] new"]) == "Added: [Comment] new"
+    assert summarize(["a", "", "gone"], ["a"]) == "Removed: gone"
+    assert summarize(["a"], ["a", ""]) is None

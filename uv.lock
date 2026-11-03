@@ -458,7 +458,7 @@ requires-dist = [
     { name = "pathspec", specifier = ">=0.12" },
     { name = "platformdirs", specifier = ">=4.2" },
     { name = "pypdfium2", specifier = ">=4.30" },
-    { name = "python-docx", specifier = ">=1.1" },
+    { name = "python-docx", specifier = ">=1.2" },
     { name = "python-pptx", specifier = ">=1.0" },
     { name = "python-ulid", specifier = ">=3.0" },
     { name = "rich", specifier = ">=13.7" },

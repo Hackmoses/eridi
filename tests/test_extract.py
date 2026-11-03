@@ -214,3 +214,92 @@ def test_text_helpers() -> None:
     assert clean_text("a  \r\nb\x00\r\n\n") == "a\nb"
     assert decode_text("﻿BOM".encode()) == "BOM"
     assert decode_text("utf16".encode("utf-16")) == "utf16"
+
+
+# --- what people change inside Word and Adobe: tracked changes and comments ---
+
+
+def _docx_with_markup() -> bytes:
+    from docx import Document
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls
+
+    doc = Document()
+    doc.add_paragraph("Block membrane in 5% BSA.")
+    p = doc.add_paragraph("Primary antibody incubation: ")
+    attrs = 'w:author="Moses" w:date="2026-11-03T00:00:00Z"'
+    deleted = "<w:r><w:delText>1 h at RT</w:delText></w:r>"
+    p._p.append(parse_xml(f'<w:del {nsdecls("w")} w:id="1" {attrs}>{deleted}</w:del>'))
+    p._p.append(parse_xml(
+        f'<w:ins {nsdecls("w")} w:id="2" {attrs}><w:r><w:t>overnight at 4 °C</w:t></w:r></w:ins>'
+    ))  # fmt: skip
+    doc.add_comment(doc.paragraphs[0].runs, text="Background was much lower", author="Moses")
+    buffer = io.BytesIO()
+    doc.save(buffer)
+    return buffer.getvalue()
+
+
+def test_docx_tracked_changes_and_comments() -> None:
+    result = extract("protocol.docx", _docx_with_markup())
+    lines = result.text.splitlines()
+    # The paragraph reads as the document does with the change accepted...
+    assert "Primary antibody incubation: overnight at 4 °C" in lines
+    # ...and the tracked change and the comment are lines of their own.
+    assert "[Tracked insertion] overnight at 4 °C — Moses" in lines
+    assert "[Tracked deletion] 1 h at RT — Moses" in lines
+    assert "[Comment] Background was much lower — Moses" in lines
+    assert "1 h at RT" not in lines[1]
+
+
+def _pdf_with_annotations(notes: list[tuple[int, str]]) -> bytes:
+    import ctypes
+
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as raw
+
+    from conftest import _pdf, _text_stream
+
+    doc = pdfium.PdfDocument(_pdf([_text_stream(["Block membrane in 5% milk for 1 h."])]))
+    page = doc[0]
+    for subtype, text in notes:
+        annot = raw.FPDFPage_CreateAnnot(page.raw, subtype)
+        raw.FPDFAnnot_SetRect(annot, raw.FS_RECTF(70, 712, 300, 735))
+        if text:
+            data = (text + "\0").encode("utf-16-le")
+            pointer = ctypes.cast(ctypes.c_char_p(data), ctypes.POINTER(raw.FPDF_WCHAR))
+            raw.FPDFAnnot_SetStringValue(annot, b"Contents", pointer)
+        raw.FPDFPage_CloseAnnot(annot)
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
+def test_pdf_comments_are_read_but_plain_highlights_are_not() -> None:
+    pdf = _pdf_with_annotations(
+        [
+            (1, "Used 5% BSA instead"),  # sticky note
+            (3, "Check lot B2291"),  # text box
+            (9, ""),  # plain highlight: left out
+            (9, "Why milk here?"),  # highlight with a typed comment: the comment counts
+            (12, ""),  # strike-out
+        ]
+    )
+    result = extract("paper.pdf", pdf)
+    lines = result.text.splitlines()
+    assert "Block membrane in 5% milk for 1 h." in lines
+    assert "[Comment, page 1] Used 5% BSA instead" in lines
+    assert "[Comment, page 1] Check lot B2291" in lines
+    assert "[Comment, page 1] Why milk here?" in lines
+    assert any(ln.startswith("[Strike-out, page 1] Block membrane") for ln in lines)
+    assert sum(ln.startswith("[") for ln in lines) == 4  # the plain highlight added nothing
+
+
+def test_adding_a_pdf_comment_is_a_change(tmp_path: Path) -> None:
+    from eridi.core.changes import diff_texts
+
+    before = extract("paper.pdf", _pdf_with_annotations([])).text
+    after = extract("paper.pdf", _pdf_with_annotations([(1, "Used 5% BSA instead")])).text
+    _, summary = diff_texts(before, after)
+    assert summary == "Added: [Comment, page 1] Used 5% BSA instead"
+    highlight_only = extract("paper.pdf", _pdf_with_annotations([(9, "")])).text
+    assert diff_texts(before, highlight_only)[1] is None  # highlighting is not a change

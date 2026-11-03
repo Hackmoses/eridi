@@ -5,6 +5,7 @@ One line per paragraph, and table rows as `cell | cell`, so line diffs (M4) read
 
 import io
 from collections.abc import Iterable
+from typing import Any
 
 from eridi.core.extract.base import ExtractResult, register
 
@@ -24,6 +25,51 @@ def _row(cells: Iterable[str]) -> str:
     return " | ".join(values)
 
 
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+
+
+def _w_text(element: Any, tag: str = "t") -> str:
+    """The text of a Word XML element, leaving out text deleted with Track Changes."""
+    parts = []
+    for node in element.iter(_W + tag, _W + "tab", _W + "br"):
+        if tag == "t" and any(a.tag == _W + "del" for a in node.iterancestors()):
+            continue
+        if node.tag == _W + tag:
+            parts.append(node.text or "")
+        else:
+            parts.append(" ")
+    return " ".join("".join(parts).split())
+
+
+def _docx_markup(doc: Any) -> list[str]:
+    """Tracked changes and comments, one line each, so edits to them show as changes.
+
+    Paragraph text already reads like the document with insertions accepted; these lines
+    say what was tracked, and what each comment says."""
+    lines: list[str] = []
+    body = doc.element.body
+    for change in body.iter(_W + "ins", _W + "del"):
+        if change.tag == _W + "ins":
+            text = _w_text(change)
+            label = "Tracked insertion"
+        else:
+            text = _w_text(change, "delText")
+            label = "Tracked deletion"
+        if text:
+            author = change.get(_W + "author")
+            lines.append(f"[{label}] {text}" + (f" — {author}" if author else ""))
+    try:
+        comments = list(doc.comments)
+    except Exception:  # documents without a comments part, or older python-docx
+        comments = []
+    for comment in comments:
+        text = " ".join(comment.text.split())
+        if text:
+            author = comment.author
+            lines.append(f"[Comment] {text}" + (f" — {author}" if author else ""))
+    return lines
+
+
 @register(".docx", ".docm")
 def extract_docx(data: bytes) -> ExtractResult:
     from docx import Document
@@ -37,13 +83,15 @@ def extract_docx(data: bytes) -> ExtractResult:
 
     def add_table(table: Table) -> None:
         for row in table.rows:
-            line = _row(cell.text for cell in row.cells)
+            line = _row(" ".join(_w_text(p) for p in cell._tc.iter(_W + "p")) for cell in row.cells)
             if line:
                 lines.append(line)
 
     for block in doc.iter_inner_content():
         if isinstance(block, Paragraph):
-            text = block.text.strip()
+            # Read the XML ourselves: python-docx's paragraph.text drops text typed with
+            # Track Changes on.
+            text = _w_text(block._p)
             if not text:
                 continue
             lines.append(text)
@@ -55,6 +103,7 @@ def extract_docx(data: bytes) -> ExtractResult:
                 first_heading = text
         else:
             add_table(block)
+    lines += _docx_markup(doc)
     title = doc.core_properties.title or first_heading or first_line
     return ExtractResult("\n".join(lines), title)
 

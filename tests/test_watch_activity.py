@@ -196,3 +196,14 @@ def test_activity_api(lab: Eridi, sample_lab: SampleLab) -> None:
         ).json()
         assert {"op": "+", "text": "Primary antibody incubation: 2 h at RT."} in diff["lines"]
         assert client.get("/api/status", headers=headers).json()["last_activity"] is not None
+
+
+def test_a_word_comment_shows_in_activity(lab: Eridi, sample_lab: SampleLab) -> None:
+    doc = Document(str(sample_lab.protocol_docx))
+    doc.add_comment(doc.paragraphs[2].runs, text="New lot needs 2 h", author="Moses")
+    doc.save(str(sample_lab.protocol_docx))
+    lab.scan()
+    [item] = lab.activity()
+    assert item.kind == "edited"
+    assert item.summary == "Added: [Comment] New lot needs 2 h — Moses"
+    assert item.needs_why

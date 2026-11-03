@@ -94,15 +94,18 @@ def summarize_pair(old: str, new: str) -> str:
 
 
 def summarize(old_lines: list[str], new_lines: list[str]) -> str | None:
-    """A one-line summary of the first change between two texts."""
+    """A one-line summary of the first change between two texts (blank lines don't count)."""
     matcher = difflib.SequenceMatcher(a=old_lines, b=new_lines, autojunk=False)
-    for tag, i1, _i2, j1, _j2 in matcher.get_opcodes():
-        if tag == "replace":
-            return summarize_pair(old_lines[i1], new_lines[j1])
-        if tag == "delete":
-            return f"Removed: {_clip(old_lines[i1].strip())}"
-        if tag == "insert":
-            return f"Added: {_clip(new_lines[j1].strip())}"
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        removed = [ln.strip() for ln in old_lines[i1:i2] if ln.strip()]
+        added = [ln.strip() for ln in new_lines[j1:j2] if ln.strip()]
+        if tag == "equal" or not (removed or added):
+            continue
+        if removed and added:
+            return summarize_pair(removed[0], added[0])
+        if removed:
+            return f"Removed: {_clip(removed[0])}"
+        return f"Added: {_clip(added[0])}"
     return None
 
 
