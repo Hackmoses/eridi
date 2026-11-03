@@ -11,9 +11,11 @@ Version history comes from `/items/{id}/versions`.
 """
 
 import logging
+import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -29,6 +31,13 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 ROOT_ID_PREFIX = "ms:"
 """Storage IDs for Microsoft drives are `ms:<driveId>` (see RECORD_FORMAT.md, "Roots")."""
 TIMEOUT = httpx.Timeout(30.0, read=120.0)
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+MAX_ATTEMPTS = 6
+MAX_WAIT = 300.0
+"""Never wait longer than this for one retry, whatever `Retry-After` says."""
+SAVE_EVERY_PAGES = 20
+"""While listing a large drive, save progress this often, so an interrupted first scan
+picks up where it stopped."""
 
 
 def root_id_for(drive_id: str) -> str:
@@ -54,9 +63,18 @@ TokenProvider = Callable[[], str]
 class GraphClient:
     """Plain HTTPS to Microsoft Graph with a bearer token."""
 
-    def __init__(self, token: TokenProvider, *, http: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        token: TokenProvider,
+        *,
+        http: httpx.Client | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        max_attempts: int = MAX_ATTEMPTS,
+    ) -> None:
         self._token = token
         self.http = http or httpx.Client(timeout=TIMEOUT, follow_redirects=True)
+        self.sleep = sleep
+        self.max_attempts = max_attempts
 
     def __getstate__(self) -> dict[str, Any]:
         raise TypeError("A Graph client can't be sent to another process.")
@@ -65,19 +83,32 @@ class GraphClient:
         return path_or_url if path_or_url.startswith("https://") else GRAPH + path_or_url
 
     def request(self, path_or_url: str, params: dict[str, str] | None = None) -> httpx.Response:
+        """GET with the token. Throttling (429), busy servers (5xx) and dropped connections
+        are retried, waiting as long as Microsoft's `Retry-After` asks (else 1, 2, 4… s)."""
         url = self._url(path_or_url)
-        try:
-            response = self.http.get(
-                url, params=params, headers={"Authorization": f"Bearer {self._token()}"}
-            )
-        except httpx.TransportError as exc:
-            raise GraphError(
-                f"Couldn't reach Microsoft ({type(exc).__name__}). Check the internet "
-                "connection; Eridi will try again at the next scan."
-            ) from None
-        if response.status_code >= 400:
-            raise _error_for(response)
-        return response
+        for attempt in range(1, self.max_attempts + 1):
+            last = attempt == self.max_attempts
+            try:
+                response = self.http.get(
+                    url, params=params, headers={"Authorization": f"Bearer {self._token()}"}
+                )
+            except httpx.TransportError as exc:
+                if last:
+                    raise GraphError(
+                        f"Couldn't reach Microsoft ({type(exc).__name__}). Check the internet "
+                        "connection; Eridi will try again at the next scan."
+                    ) from None
+                self.sleep(_backoff(attempt))
+                continue
+            if response.status_code in RETRY_STATUSES and not last:
+                wait = _retry_after(response) or _backoff(attempt)
+                log.info("Microsoft asked to wait %.0f s (HTTP %s).", wait, response.status_code)
+                self.sleep(min(wait, MAX_WAIT))
+                continue
+            if response.status_code >= 400:
+                raise _error_for(response)
+            return response
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def get(self, path_or_url: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         data = self.request(path_or_url, params).json()
@@ -107,6 +138,24 @@ class GraphClient:
             yield from page.get("value", [])
 
 
+def _backoff(attempt: int) -> float:
+    return float(min(2 ** (attempt - 1), 60))
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    """Seconds from a `Retry-After` header (a number, or an HTTP date)."""
+    value = response.headers.get("Retry-After", "").strip()
+    if not value:
+        return None
+    if value.isdigit():
+        return float(value)
+    try:
+        moment = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, moment.timestamp() - time.time())
+
+
 def _error_for(response: httpx.Response) -> GraphError:
     code = message = None
     try:
@@ -127,6 +176,11 @@ def _error_for(response: httpx.Response) -> GraphError:
             "Microsoft refused access. Your organization may need to approve Eridi "
             "(see docs/IT_APPROVAL.md), or you no longer have access to this library.",
             status, code,
+        )  # fmt: skip
+    if status == 429 or status >= 500:
+        return GraphError(
+            f"Microsoft is busy (HTTP {status}) and asked Eridi to slow down. "
+            "The next scan will carry on.", status, code,
         )  # fmt: skip
     if status == 404:
         return GraphError("Not found in Microsoft storage (moved or deleted?).", status, code)
@@ -332,20 +386,53 @@ class MsGraphConnector:
         return upserts, removed, str(cursor_out)
 
     def sync(self) -> list[RemoteChange]:
-        """Bring the item tree up to date. Returns what changed, by path."""
+        """Bring the item tree up to date. Returns what changed, by path.
+
+        Progress is saved every `SAVE_EVERY_PAGES` pages, so an interrupted listing resumes
+        from where it stopped. If Microsoft says the saved cursor is too old, the drive is
+        listed again from the start."""
         items = self._load()
         before = self._files(items)
-        reset = self._cursor is None
-        upserts, removed, cursor = self._delta(self._cursor)
-        if reset:
-            items.clear()
-        for item_id in removed:
-            items.pop(item_id, None)
-        items.update({i.id: i for i in upserts})
-        self.cache.save(self._root_id, cursor, upserts, removed, reset=reset)
-        self._cursor = cursor
+        try:
+            touched = self._run_delta(items)
+        except ResyncRequiredError:
+            if self._cursor is None:
+                raise
+            log.info("Listing %s again from the start (Microsoft asked to resync).", self.drive_id)
+            self._cursor = None
+            touched = self._run_delta(items)
         self._by_path = None
-        return self._changes(before, items, {i.id for i in upserts})
+        return self._changes(before, items, touched)
+
+    def _run_delta(self, items: dict[str, CloudItem]) -> set[str]:
+        reset = self._cursor is None
+        url = self._cursor or f"{self._base}/root/delta"
+        upserts: list[CloudItem] = []
+        removed: list[str] = []
+        touched: set[str] = set()
+        unsaved = 0
+        if reset:
+            items.clear()  # in memory only; the saved tree is replaced at the first save
+        for page in self.client.pages(url):
+            for data in page.get("value", []):
+                item = None if "deleted" in data else _item(data)
+                if item is None:  # deleted, or became something we don't read
+                    removed.append(str(data["id"]))
+                    items.pop(str(data["id"]), None)
+                else:
+                    upserts.append(item)
+                    items[item.id] = item
+                    touched.add(item.id)
+            unsaved += 1
+            done = page.get("@odata.deltaLink")
+            link = done or page.get("@odata.nextLink")
+            if link and (done or unsaved >= SAVE_EVERY_PAGES):
+                self.cache.save(self._root_id, str(link), upserts, removed, reset=reset)
+                self._cursor = str(link)
+                reset, unsaved, upserts, removed = False, 0, [], []
+            if done:
+                return touched
+        raise GraphError("Microsoft didn't finish listing the drive. Try again later.")
 
     def _files(self, items: dict[str, CloudItem]) -> dict[str, str]:
         """Item ID → path, for the files a scan should see."""
