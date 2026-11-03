@@ -126,5 +126,5 @@ def test_dismissed_changes_and_mcp_round_trip(tmp_path: Path) -> None:
 def test_mcp_allow_writes_must_be_boolean(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     path.write_text("[mcp]\nallow_writes = 'yes'\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="'mcp.allow_writes'"):
+    with pytest.raises(ConfigError, match=r"'mcp\.allow_writes'"):
         load_config(path)
