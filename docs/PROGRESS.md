@@ -6,7 +6,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 ## Phase A — v0
 - [ ] **M0 Foundations**: [x] 1 scaffold · [x] 2 tooling · [x] 3 CI · [x] 4 open-source files · [x] 5 core helpers · [x] 6 fixture builder · [ ] Human check: CI green on GitHub; tests pass on your Mac and a Windows machine
 - [ ] **M1 Record store**: [x] 1 schema · [x] 2 store · [x] 3 concurrency · [x] 4 views · [x] 5 config · [ ] Human check: record folder in a real sync folder, two computers
-- [ ] **M2 Local connector and extraction**: [x] 1 protocol · [ ] 2 local connector · [ ] 3 extractors
+- [ ] **M2 Local connector and extraction**: [x] 1 protocol · [x] 2 local connector · [ ] 3 extractors
 - [ ] **M3 Index and search**: [ ] 1 db · [ ] 2 files · [ ] 3 records · [ ] 4 search · [ ] 5 rebuild
 - [ ] **M4 Scanning, snapshots, changes**: [ ] 1 snapshots · [ ] 2 scanner · [ ] 3 changes/diffs · [ ] 4 service
 - [ ] **M5 CLI**: [ ] 1 commands · [ ] 2 interactive why · [ ] 3 file arguments · [ ] Human check: one week of real use
@@ -37,3 +37,4 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - 2026-11-03 M1.1: the reader requires non-empty `text` only for `note` and `decision` (other kinds may leave it empty). Unknown fields are kept on nested objects (author, subjects, change, links, project) as well as the entry. `make_entry()` creates validated entries and lowercases tags.
 - 2026-11-03 M1.4: view rules beyond the plan: competing corrections → newest wins; a retracted correction still hides what it replaced (delete means gone); retracting a tombstone restores its target; references to newer IDs are ignored, which rules out cycles. Documented in `core/record/views.py`.
 - 2026-11-03 M1.5: default size limit is 25 MB (so the plan's 50 MB file is skipped). Added a `Root` model to `core/models.py`; config keeps unknown keys when saving.
+- 2026-11-03 M2.2: folder links are never followed (even inside the root, to avoid loops and duplicates); file links are followed only when they resolve inside the root. `.eridiignore` is read from the root folder only. `changes_since` for local folders reports files modified after the cursor time; removals come from comparing listings in the scanner.

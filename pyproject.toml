@@ -18,6 +18,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "pathspec>=0.12",     # gitignore-style patterns for .eridiignore
     "platformdirs>=4.2",  # correct per-OS app-data locations
     "python-ulid>=3.0",   # sortable IDs that are unique across devices
     "tomli-w>=1.0",       # writes config.toml (the standard library only reads TOML)
