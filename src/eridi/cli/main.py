@@ -302,6 +302,14 @@ def init(
             out.print("Next: eridi storage add <folder>")
 
 
+def ask_to_mark() -> bool:
+    return typer.confirm(
+        "Shared with your other computers or your lab? Mark it so they recognize it "
+        "(writes .eridi-root.json)",
+        default=False,
+    )
+
+
 @storage_app.command("add")
 def storage_add(
     path: Annotated[Path, typer.Argument(help="A local or synced folder.")],
@@ -311,18 +319,25 @@ def storage_add(
         bool, typer.Option(help="Allow saving files here (from a later version).")
     ] = False,
     mark: Annotated[
-        bool,
+        bool | None,
         typer.Option(
-            help="Write a small .eridi-root.json into the folder so your other computers "
-            "recognize it. Nothing else is ever written there."
+            "--mark/--no-mark",
+            help="Write a small .eridi-root.json into the folder so your other computers and "
+            "labmates recognize it. Nothing else is ever written there. Asked if not given.",
         ),
-    ] = False,
+    ] = None,
 ) -> None:
     """Connect a folder to search."""
     with session() as eridi:
-        root = eridi.add_root(path, label, mark_folder=mark, search=search, save=save)
-        console().print(f"Added [bold]{escape(root.label)}[/bold] ({escape(root.location)}).")
-        console().print("Next: eridi scan")
+        root = eridi.add_root(path, label, mark_folder=bool(mark), search=search, save=save)
+        out = console()
+        out.print(f"Added [bold]{escape(root.label)}[/bold] ({escape(root.location)}).")
+        if eridi.root_marker(root.id) == root.id and mark is None:
+            out.print("[dim]Recognized from its folder marker.[/dim]")
+        elif mark is None and sys.stdin.isatty() and ask_to_mark():
+            eridi.mark_root(root.id)
+            out.print("Marked.")
+        out.print("Next: eridi scan")
 
 
 @storage_app.command("list")
@@ -338,7 +353,26 @@ def storage_list() -> None:
             search = "search on" if r.search else "search off"
             save = "save on" if r.save else "save off"
             out.print(f"[bold]{escape(r.label)}[/bold]  {escape(r.location)}")
-            out.print(f"  [dim]{search} · {save} · {r.id}[/dim]")
+            marked = " · marked" if eridi.root_marker(r.id) == r.id else ""
+            out.print(f"  [dim]{search} · {save}{marked} · {r.id}[/dim]")
+
+
+@storage_app.command("mark")
+def storage_mark(
+    storage: Annotated[str, typer.Argument(help="The storage's name or ID.")],
+) -> None:
+    """Let your other computers and labmates recognize this folder, even at another path.
+
+    Writes .eridi-root.json into the folder. If a labmate already marked it, this computer
+    uses their ID instead, so everyone's notes about its files line up."""
+    with session() as eridi:
+        before = storage_id(eridi, storage)
+        root = eridi.mark_root(before)
+        out = console()
+        if root.id != before:
+            out.print(f"{escape(root.label)} now uses the shared ID {root.id}. Next: eridi scan")
+        else:
+            out.print(f"{escape(root.label)} is marked ({root.id}).")
 
 
 @storage_app.command("remove")

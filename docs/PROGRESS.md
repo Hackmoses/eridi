@@ -16,7 +16,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 
 ## Phase B — v0.5
 - [x] **M8 Projects**: [x] 1 project entries and folders · [x] 2 CLI and UI · [x] 3 scoped notes and search
-- [ ] **M9 Shared record and watching**: [x] 1 join a shared record · [x] 2 watcher · [ ] 3 root markers · [ ] 4 doctor
+- [ ] **M9 Shared record and watching**: [x] 1 join a shared record · [x] 2 watcher · [x] 3 root markers · [ ] 4 doctor
 - [ ] M10 Microsoft connector
 
 ## Phase C — v0.6 → v1
@@ -69,3 +69,4 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - 2026-11-03 M8.3: `--project` on `search`, `changes`, `recent` and `note`; `why`/`note --file` put the note in the file's project automatically and say which. MCP: new read-only `list_projects` tool; `search` takes `project`; `list_recent`/`pending_changes` accept a name or ID; entries show their project. The plan has no Human check for M8.
 - 2026-11-03 M9.1: `eridi init --join <folder>` joins an existing record folder and never creates one. If the folder can't be found it says to check sync; if the record is one level down it names that folder. After joining it lists who has written ("12 entries from A. Okafor, …"; `Eridi.record_members()`, where AI-written entries count for their person). Changing the record folder now reloads it fully, so entries from the old folder don't linger in the index.
 - 2026-11-03 M9.2: the watcher also watches the record folder: a labmate's entry, once their sync app delivers it, is in search, Recent and project pages within the debounce window, and `eridi watch` prints it ("B. Lee · file: text"). The debounce stays 2 s (the plan says 5 s; 2 s was chosen when watching was pulled forward, and sync apps write each entry file in one go). A folder that can't be watched (OS watch limit, unsupported network drive, or the watcher can't start) is checked every 60 s instead, and `eridi watch` says so. Polling doesn't restart the quiet period. `Eridi.refresh_record()` returns entries that just arrived.
+- 2026-11-03 M9.3: `eridi storage add` asks (in a terminal only) whether to mark a folder that's shared with other computers or the lab; `--mark/--no-mark` answers ahead of time, and scripts get no marker unless asked. New `eridi storage mark <storage>` (and a "Mark for other computers" button on the Storage page) marks a folder later. If a labmate already marked the folder, this computer switches to their storage ID, so everyone's notes line up; this computer's own text-version history for that folder starts again at the next scan (the record is untouched). `storage list` shows "marked".

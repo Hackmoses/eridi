@@ -144,9 +144,13 @@ def diff_json(d: FileDiff) -> dict[str, Any]:
     }
 
 
-def root_json(r: Root) -> dict[str, Any]:
+def root_json(r: Root, marked: bool | None = None) -> dict[str, Any]:
     return {"id": r.id, "label": r.label, "location": r.location, "kind": r.kind,
-            "search": r.search, "save": r.save}  # fmt: skip
+            "search": r.search, "save": r.save, "marked": marked}  # fmt: skip
+
+
+def _marked(eridi: Eridi, r: Root) -> bool:
+    return eridi.root_marker(r.id) == r.id
 
 
 def project_json(eridi: Eridi, p: Project) -> dict[str, Any]:
@@ -367,7 +371,8 @@ def files(request: Request, q: str = "", limit: int = 20) -> Any:
 
 @router.get("/storage")
 def storage(request: Request) -> Any:
-    return {"storage": [root_json(r) for r in _eridi(request).list_roots()]}
+    eridi = _eridi(request)
+    return {"storage": [root_json(r, _marked(eridi, r)) for r in eridi.list_roots()]}
 
 
 @router.patch("/storage/{root_id}")
@@ -447,6 +452,17 @@ def remove_project_folder(request: Request, project_id: str, body: FolderIn) -> 
         return project_json(eridi, eridi.remove_project_folder(project_id, body.folder))
     except KNOWN_ERRORS as exc:
         return error(exc)
+
+
+@router.post("/storage/{root_id}/mark")
+def mark_storage(request: Request, root_id: str) -> Any:
+    """Write the folder marker so other computers and labmates recognize this folder."""
+    eridi = _eridi(request)
+    try:
+        root = eridi.mark_root(root_id)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return root_json(root, True)
 
 
 @router.post("/scan")

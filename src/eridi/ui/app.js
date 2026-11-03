@@ -334,10 +334,16 @@ async function renderStorage() {
         } });
         return el("label", { for: id, class: "switch" }, box, " " + label);
       };
+      const mark = root.kind === "local" && !root.marked ? el("button", { type: "button", class: "secondary",
+        title: "Writes .eridi-root.json into the folder, so your other computers and labmates recognize it",
+        onclick: async () => {
+          try { await api("/storage/" + encodeURIComponent(root.id) + "/mark", { method: "POST" }); renderStorage(); }
+          catch (error) { alert(error.message); }
+        } }, "Mark for other computers") : null;
       return el("li", { class: "card" },
         el("h2", {}, root.label),
         el("div", { class: "meta" }, root.location),
-        el("div", { class: "actions" }, toggle("search", "Search"), toggle("save", "Save")));
+        el("div", { class: "actions" }, toggle("search", "Search"), toggle("save", "Save"), mark));
     })));
   } catch (error) { showError(list, error); }
 }

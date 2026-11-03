@@ -422,6 +422,52 @@ class Eridi:
                 upsert_root(self.conn, root)
             return root
 
+    def root_marker(self, root_id: str) -> str | None:
+        """The storage ID in a local folder's `.eridi-root.json`, if it has one."""
+        root = self.get_root(root_id)
+        if root.kind != "local":
+            return None
+        marker = read_root_marker(Path(root.location))
+        return marker[0] if marker else None
+
+    def mark_root(self, root_id: str) -> Root:
+        """Let other computers recognize this storage folder, even at a different path.
+
+        Writes `.eridi-root.json` (the only file Eridi ever writes into storage, and only
+        when asked). If the folder already has a marker from another computer with a
+        different ID, this computer switches to that ID instead, so everyone's notes about
+        its files line up; its files are re-read on the next scan.
+        """
+        with self._lock:
+            root = self.get_root(root_id)
+            if root.kind != "local":
+                raise EridiError(f"{root.label!r} is cloud storage; it is recognized by its ID.")
+            folder = Path(root.location)
+            marker = read_root_marker(folder)
+            if marker is None:
+                try:
+                    write_root_marker(folder, root.id, root.label)
+                except OSError as exc:
+                    raise EridiError(
+                        f"Could not write the folder marker in {folder}: "
+                        f"{exc.strerror or exc}. Check that you can write to that folder."
+                    ) from None
+                return root
+            shared_id = marker[0]
+            if shared_id == root.id:
+                return root
+            if self._config.root(shared_id) is not None:
+                raise EridiError(
+                    f"{folder} is marked as storage {shared_id}, which is already connected "
+                    "here at another path. Remove one of them with `eridi storage remove`."
+                )
+            self.remove_root(root.id)
+            switched = replace(root, id=shared_id)
+            self._save(self._config.with_root(switched))
+            with self.conn:
+                upsert_root(self.conn, switched)
+            return switched
+
     def remove_root(self, root_id: str) -> None:
         """Disconnect storage. Its files leave the index; the record keeps everything said
         about them."""
