@@ -111,3 +111,12 @@ def test_unicode_paths(conn: sqlite3.Connection) -> None:
     assert get_file(conn, "root_A", "Protokolle_Ü/Färbung ñ v2.md") == stored
     assert fts_match(conn, "färbeprotokoll") == [stored.id]
     assert fts_match(conn, "farbeprotokoll") == [stored.id]  # diacritics folded
+
+
+def test_missing_files_leave_full_text(conn: sqlite3.Connection) -> None:
+    stored = upsert_file(conn, info("gone soon"), "gone soon")
+    set_status(conn, "root_A", stored.path, "missing")
+    assert stored.id is not None
+    assert file_text(conn, stored.id) is None
+    assert fts_match(conn, "gone") == []
+    assert get_file(conn, "root_A", stored.path) is not None  # the row itself stays

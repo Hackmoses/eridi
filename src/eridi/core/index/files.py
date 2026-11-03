@@ -118,9 +118,15 @@ def upsert_file(
 
 
 def set_status(conn: sqlite3.Connection, root_id: str, path: str, status: str) -> None:
-    conn.execute(
-        "UPDATE files SET status = ? WHERE root_id = ? AND path = ?", (status, root_id, path)
-    )
+    """Set a file's status. A missing file leaves the full-text index (its row and history
+    stay), so search statistics match a rebuild, which can't see files that are gone. If the
+    file comes back it must be re-read, since `upsert_file(text=None)` has no text to keep."""
+    row = conn.execute(
+        "UPDATE files SET status = ? WHERE root_id = ? AND path = ? RETURNING id",
+        (status, root_id, path),
+    ).fetchone()
+    if row is not None and status == "missing":
+        conn.execute("DELETE FROM files_fts WHERE rowid = ?", (row[0],))
 
 
 def file_text(conn: sqlite3.Connection, file_id: int) -> str | None:
