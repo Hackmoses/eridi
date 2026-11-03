@@ -6,12 +6,13 @@ scans in the background while it answers requests).
 """
 
 import contextlib
+import functools
 import json
 import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -150,6 +151,7 @@ class Eridi:
     def __init__(self, config_file: Path | None = None, index_file: Path | None = None) -> None:
         self.config_file = config_file or config_path()
         self._config = load_config(self.config_file)
+        self._config_stamp = self._stamp()
         self._lock = threading.RLock()
         self.conn: sqlite3.Connection = open_index(index_file, threads=True)
         self.snapshots = SnapshotStore(cap_bytes=self._config.settings.snapshot_cap_mb * 2**20)
@@ -170,16 +172,33 @@ class Eridi:
 
     @property
     def config(self) -> Config:
+        self._reload_if_changed()
         return self._config
+
+    def _stamp(self) -> int | None:
+        try:
+            return self.config_file.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _reload_if_changed(self) -> None:
+        """Pick up changes another Eridi made (e.g. `eridi storage add` while the app runs)."""
+        stamp = self._stamp()
+        if stamp != self._config_stamp:
+            self._config = load_config(self.config_file)
+            self._config_stamp = stamp
+            self.snapshots.cap_bytes = self._config.settings.snapshot_cap_mb * 2**20
+            self._store = None
 
     def _save(self, config: Config) -> None:
         save_config(config, self.config_file)
+        self._config_stamp = self._stamp()
         self._config = config
         self.snapshots.cap_bytes = config.settings.snapshot_cap_mb * 2**20
 
     @property
     def initialized(self) -> bool:
-        return self.config_file.exists() and bool(self._config.user.name.strip())
+        return self.config_file.exists() and bool(self.config.user.name.strip())
 
     def init(
         self, name: str, email: str | None = None, record_folder: Path | None = None
@@ -226,6 +245,7 @@ class Eridi:
     # --- storage ---
 
     def list_roots(self) -> list[Root]:
+        self._reload_if_changed()
         return list(self._config.roots)
 
     def get_root(self, root_id: str) -> Root:
@@ -359,11 +379,16 @@ class Eridi:
                 referenced.add(change.from_text_sha256)
         return referenced
 
-    def scan(self, root_id: str | None = None) -> ScanSummary:
-        """Scan storage (all roots with search on, or one), then refresh the record."""
+    def scan(
+        self, root_id: str | None = None, progress: Callable[[Root, int, str], None] | None = None
+    ) -> ScanSummary:
+        """Scan storage (all roots with search on, or one), then refresh the record.
+
+        `progress(root, files_done, path)` is called before each file."""
         with self._lock:
+            self._reload_if_changed()
             if get_meta(self.conn, BUILT_KEY) is None:
-                report = self.rebuild_index()
+                report = self.rebuild_index(progress)
                 return ScanSummary(list(report.roots.values()), report.record, rebuilt=True)
             roots = [self.get_root(root_id)] if root_id else self.list_roots()
             summary = ScanSummary()
@@ -375,16 +400,22 @@ class Eridi:
                 except ConnectorError as exc:
                     summary.reports.append(ScanReport(root.id, unavailable=str(exc)))
                     continue
+                on_file = None if progress is None else functools.partial(progress, root)
                 summary.reports.append(
-                    scan_root(self.conn, root, connector, self.snapshots, self._config.settings)
+                    scan_root(
+                        self.conn, root, connector, self.snapshots, self._config.settings, on_file
+                    )
                 )
             summary.record = self._refresh_records(force=True)
             summary.evicted = len(self.snapshots.evict(self._referenced_texts()))
             return summary
 
-    def rebuild_index(self) -> RebuildReport:
+    def rebuild_index(
+        self, progress: Callable[[Root, int, str], None] | None = None
+    ) -> RebuildReport:
         """Throw the index away and rebuild it from storage, snapshots and the record."""
         with self._lock:
+            self._reload_if_changed()
             roots = self.list_roots()
             connectors: dict[str, Connector] = {}
             for root in roots:
@@ -395,8 +426,9 @@ class Eridi:
             except EridiError:
                 store = None
             report = rebuild(
-                self.conn, roots, store, self.snapshots, self._config.settings, connectors
-            )
+                self.conn, roots, store, self.snapshots, self._config.settings, connectors,
+                progress,
+            )  # fmt: skip
             with self.conn:
                 set_meta(self.conn, BUILT_KEY, str(time.time()))
             self._last_refresh = time.monotonic()

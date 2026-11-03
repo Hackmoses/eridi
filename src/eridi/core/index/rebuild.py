@@ -4,8 +4,9 @@ The index is disposable: a rebuild must give the same search results as an index
 was kept up to date step by step. `tests/test_index_rebuild.py` enforces this.
 """
 
+import functools
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from eridi.connectors import connector_for
@@ -35,6 +36,7 @@ def rebuild(
     snapshots: SnapshotStore,
     settings: Settings | None = None,
     connectors: dict[str, Connector] | None = None,
+    progress: Callable[[Root, int, str], None] | None = None,
 ) -> RebuildReport:
     """Drop every table, index each root with search on, restore version history from the
     snapshot log, then load the whole record."""
@@ -54,7 +56,8 @@ def rebuild(
             with conn:
                 upsert_root(conn, root)
             continue
-        scanned = scan_root(conn, root, connector, snapshots, settings)
+        on_file = None if progress is None else functools.partial(progress, root)
+        scanned = scan_root(conn, root, connector, snapshots, settings, on_file)
         report.roots[root.id] = scanned
         if scanned.unavailable:
             report.unavailable[root.id] = scanned.unavailable

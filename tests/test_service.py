@@ -244,3 +244,20 @@ def test_doctor_reports_missing_storage(lab: Eridi, tmp_path: Path) -> None:
     assert not report.ok
     assert any(c.status == "error" and "USB" in c.name for c in report.checks)
     assert lab.scan().reports[-1].unavailable is not None
+
+
+def test_sees_storage_added_by_another_eridi(app: Eridi, sample_lab: SampleLab) -> None:
+    """The web app keeps running while `eridi storage add` runs in a terminal."""
+    app.init("A. Okafor")
+    assert app.list_roots() == []
+    with Eridi() as terminal:
+        terminal.add_root(sample_lab.root, "Lab Drive")
+    assert [r.label for r in app.list_roots()] == ["Lab Drive"]
+    assert app.scan().total("new") == 9
+
+
+def test_scan_reports_progress(lab: Eridi, sample_lab: SampleLab) -> None:
+    edit_protocol(sample_lab, "Primary antibody incubation: 9 h at RT.")
+    seen: list[tuple[str, int, str]] = []
+    lab.scan(progress=lambda root, n, path: seen.append((root.label, n, path)))
+    assert len(seen) == 9 and seen[0][0] == "Lab Drive"

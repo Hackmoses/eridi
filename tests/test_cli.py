@@ -232,3 +232,15 @@ def test_broken_config_is_explained(isolated_home: Path) -> None:
     out = fails("storage", "list")
     assert "config.toml is not valid TOML" in out
     assert "line 1" in out
+
+
+def test_ctrl_c_during_scan_explains(lab: SampleLab, monkeypatch: pytest.MonkeyPatch) -> None:
+    from eridi.core.service import Eridi
+
+    def interrupted(self: Eridi, *args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Eridi, "scan", interrupted)
+    result = run("scan")
+    assert result.exit_code == 130
+    assert "Work done so far is kept" in result.output

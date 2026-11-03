@@ -227,3 +227,26 @@ def test_scan_roots_skips_roots_with_search_off(lab: Lab) -> None:
         lab.snaps,
     )
     assert [r.root_id for r in reports] == [lab.root.id]
+
+
+def test_files_nothing_can_be_read_from_are_not_opened(
+    lab: Lab, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (lab.sample.root / "Gel image 2026-10-01.tif").write_bytes(b"II*\x00" + b"\x00" * 50_000)
+    (lab.sample.root / "Talk recording.mp4").write_bytes(b"\x00" * 50_000)
+    reads: list[str] = []
+    real_open = lab.connector.open_bytes
+    monkeypatch.setattr(lab.connector, "open_bytes", lambda p: reads.append(p) or real_open(p))
+    report = lab.scan()
+    assert "Gel image 2026-10-01.tif" in report.new
+    assert not any(p.endswith((".tif", ".mp4")) for p in reads)
+    assert report.skipped == []  # not "skipped": they're indexed by name
+    stored = get_file(lab.conn, lab.root.id, "Gel image 2026-10-01.tif")
+    assert stored is not None and stored.extract_status == "name_only"
+
+
+def test_progress_is_reported_per_file(lab: Lab) -> None:
+    calls: list[tuple[int, str]] = []
+    scan_root(lab.conn, lab.root, lab.connector, lab.snaps, None, lambda n, p: calls.append((n, p)))
+    assert [n for n, _ in calls] == list(range(9))
+    assert PROTOCOL in [p for _, p in calls]

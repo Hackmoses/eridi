@@ -48,8 +48,10 @@ def extract_docx(data: bytes) -> ExtractResult:
                 continue
             lines.append(text)
             first_line = first_line or text
-            style = block.style.name if block.style is not None else ""
-            if first_heading is None and (style or "").startswith(("Heading", "Title")):
+            # The raw style ID ("Heading1", "Title") is cheap; `block.style` searches every
+            # style in the document for each paragraph and dominated scan time.
+            style_id = block._p.style or "" if first_heading is None else ""
+            if first_heading is None and style_id.startswith(("Heading", "Title")):
                 first_heading = text
         else:
             add_table(block)

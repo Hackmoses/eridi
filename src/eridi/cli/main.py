@@ -8,7 +8,7 @@ import sys
 import urllib.error
 import urllib.request
 import webbrowser
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -22,7 +22,7 @@ from eridi.core.changes import FileDiff
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit
-from eridi.core.models import OUTCOMES, Entry, FileInfo, parse_timestamp
+from eridi.core.models import OUTCOMES, Entry, FileInfo, Root, parse_timestamp
 from eridi.core.record.store import RecordFolderError
 from eridi.core.service import (
     AmbiguousFileError,
@@ -73,6 +73,22 @@ def session() -> Iterator[Eridi]:
     except (EridiError, ConfigError, RecordFolderError, IndexUnavailableError) as exc:
         err_console().print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from None
+    except KeyboardInterrupt:
+        err_console().print("Stopped. Work done so far is kept; run the command again to go on.")
+        raise typer.Exit(130) from None
+
+
+@contextlib.contextmanager
+def scan_progress() -> Iterator[Callable[[Root, int, str], None]]:
+    """A one-line live status for long scans: storage, files done, current file."""
+    out = console()
+    with out.status("Scanning…") as status:
+
+        def update(root: Root, done: int, path: str) -> None:
+            name = path if len(path) <= 60 else "…" + path[-59:]
+            status.update(f"Scanning {escape(root.label)}: {done:,} files · {escape(name)}")
+
+        yield update
 
 
 def when(timestamp: str) -> str:
@@ -253,8 +269,11 @@ def scan() -> None:
     with session() as eridi:
         if not eridi.list_roots():
             raise EridiError("No storage connected. Add a folder with: eridi storage add <folder>")
-        summary = eridi.scan()
+        with scan_progress() as progress:
+            summary = eridi.scan(progress=progress)
         out = console()
+        if summary.rebuilt:
+            out.print("First scan done; later scans only read what changed.")
         for report in summary.reports:
             label = escape(eridi.root_label(report.root_id) or report.root_id)
             if report.unavailable:
@@ -490,7 +509,8 @@ def recent(
 def index_rebuild() -> None:
     """Rebuild the search index from storage, snapshots and the record."""
     with session() as eridi:
-        report = eridi.rebuild_index()
+        with scan_progress() as progress:
+            report = eridi.rebuild_index(progress)
         files = sum(len(r.new) for r in report.roots.values())
         entries = report.record.added if report.record else 0
         console().print(f"Rebuilt: {files} files, {entries} record entries.")

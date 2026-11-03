@@ -9,12 +9,13 @@ bytes appears is a move, and its history follows it.
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
 
 from eridi.connectors.base import Connector, ConnectorError, RemoteFile
 from eridi.core.config import Settings
-from eridi.core.extract import ExtractResult, extension, extract
+from eridi.core.extract import ExtractResult, extension, extract, extractor_for
 from eridi.core.hashing import sha256_bytes, sha256_text
 from eridi.core.index.files import list_files, move_file, set_status, upsert_file, upsert_root
 from eridi.core.models import FileInfo, Root, utc_now
@@ -22,7 +23,10 @@ from eridi.core.snapshots import SnapshotStore
 
 log = logging.getLogger(__name__)
 
-COMMIT_EVERY = 200
+COMMIT_EVERY = 50
+
+Progress = Callable[[int, str], None]
+"""Called before each file with (files done so far, the file's path)."""
 
 
 @dataclass
@@ -80,6 +84,7 @@ def scan_root(
     connector: Connector,
     snapshots: SnapshotStore,
     settings: Settings | None = None,
+    progress: Progress | None = None,
 ) -> ScanReport:
     settings = settings or Settings()
     report = ScanReport(root.id)
@@ -91,7 +96,9 @@ def scan_root(
     new_files: list[FileInfo] = []
     pending = 0
     try:
-        for remote in connector.list_files():
+        for done, remote in enumerate(connector.list_files()):
+            if progress is not None:
+                progress(done, remote.path)
             seen.add(remote.path)
             stored = _scan_file(conn, root, connector, remote, existing.get(remote.path), now,
                                 snapshots, settings, report)  # fmt: skip
@@ -150,10 +157,16 @@ def _scan_file(
         report.unchanged += 1
         return None
 
-    data, skipped = read_bytes(
-        connector, remote, settings.size_limit_bytes,
-        read_placeholders=settings.read_online_only_files,
-    )  # fmt: skip
+    if extractor_for(remote.path) is None:
+        # Nothing to search in it (images, videos, archives…): index its name without
+        # reading it, so scanning a folder full of media stays fast.
+        data: bytes | None = None
+        skipped: ExtractResult | None = ExtractResult("", _stem(remote.path), "name_only")
+    else:
+        data, skipped = read_bytes(
+            connector, remote, settings.size_limit_bytes,
+            read_placeholders=settings.read_online_only_files,
+        )  # fmt: skip
     content_sha = sha256_bytes(data) if data is not None else remote.content_sha256
     base = FileInfo(
         root_id=root.id,
@@ -183,7 +196,7 @@ def _scan_file(
             report.errors.append((remote.path, result.reason or "unknown error"))
             if old is not None and present:
                 return None  # keep what we had; a read error is not a change
-        else:
+        elif result.status != "name_only":
             report.skipped.append((remote.path, result.reason or result.status))
     else:
         assert data is not None  # noqa: S101
@@ -225,10 +238,11 @@ def scan_roots(
     connectors: dict[str, Connector],
     snapshots: SnapshotStore,
     settings: Settings | None = None,
+    progress: Progress | None = None,
 ) -> list[ScanReport]:
     """Scan every root with search on."""
     return [
-        scan_root(conn, root, connectors[root.id], snapshots, settings)
+        scan_root(conn, root, connectors[root.id], snapshots, settings, progress)
         for root in roots
         if root.search
     ]

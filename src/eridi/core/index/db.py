@@ -169,7 +169,8 @@ def open_index(path: Path | None = None, *, threads: bool = False) -> sqlite3.Co
     path = path or index_path()
     if str(path) != ":memory:":
         path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, check_same_thread=not threads)
+    # Another Eridi (the app and a terminal) may be writing; wait for it rather than fail.
+    conn = sqlite3.connect(path, check_same_thread=not threads, timeout=60)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode = WAL")
