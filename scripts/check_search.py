@@ -45,7 +45,7 @@ def main() -> int:
         print(f"\n{q!r}: {len(hits)} hits in {ms:.0f} ms")
         for h in hits:
             where = h.path or ""
-            mark = "" if h.matched_all else " (some words)"
+            mark = f" ({h.match}{': ' + h.term if h.term else ''})"
             print(f"  [{h.kind}] {h.title}  {where}{mark}")
             print(f"      {h.snippet_with('[', ']').replace(chr(10), ' ')}")
     shutil.rmtree(scratch, ignore_errors=True)

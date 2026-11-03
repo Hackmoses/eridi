@@ -113,16 +113,21 @@ function renderSearch(params) {
         results.replaceChildren(el("p", { class: "muted" }, "Nothing found."));
         return;
       }
-      results.replaceChildren(el("ul", { class: "results" }, data.results.map((r) => {
+      const grouped = data.results.some((r) => r.match !== "all");
+      let group = null;
+      results.replaceChildren(el("ul", { class: "results" }, data.results.flatMap((r) => {
+        const heading = grouped && r.group !== group ? el("li", { class: "group" }, r.group) : null;
+        group = r.group;
         const isFile = r.type === "file";
         const title = isFile && r.file_id ? historyLink(r.file_id, r.title) : el("span", {}, r.title);
         const meta = isFile
           ? [r.storage, r.path].filter(Boolean).join(" · ")
           : [r.kind, r.author, when(r.created_at), r.path].filter(Boolean).join(" · ");
-        return el("li", { class: "result " + r.type },
+        const item = el("li", { class: "result " + r.type },
           el("div", { class: "title" }, el("span", { class: "tag" }, isFile ? "File" : "Note"), title),
           el("div", { class: "meta" }, meta, !isFile && r.file_id ? [" · ", historyLink(r.file_id, "history")] : null),
           snippet(r.snippet));
+        return heading ? [heading, item] : [item];
       })));
     } catch (error) { showError(results, error); }
   }

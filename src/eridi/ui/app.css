@@ -104,6 +104,16 @@ textarea { width: 100%; resize: vertical; }
 
 .results { list-style: none; margin: 0; padding: 0; }
 .result { padding: .75rem 0; border-bottom: 1px solid var(--line); }
+.results .group {
+  margin-top: 1rem;
+  padding-bottom: .25rem;
+  font-size: .8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--muted);
+}
+.results .group:first-child { margin-top: 0; }
 .result .title { font-weight: 600; word-break: break-word; }
 .tag {
   display: inline-block;

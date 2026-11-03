@@ -10,7 +10,7 @@ from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import Guard
 from eridi.core.changes import FileDiff, PendingChange
 from eridi.core.config import ConfigError
-from eridi.core.index.search import SearchHit
+from eridi.core.index.search import SearchHit, group_label
 from eridi.core.models import Entry, FileInfo, Root
 from eridi.core.record.store import RecordFolderError
 from eridi.core.service import (
@@ -102,6 +102,8 @@ def hit_json(h: SearchHit) -> dict[str, Any]:
         "author": h.author,
         "created_at": h.created_at,
         "partial": not h.matched_all,
+        "match": h.match,
+        "group": group_label(h),
     }
 
 

@@ -20,7 +20,7 @@ from mcp_types import ToolAnnotations
 
 from eridi import __version__
 from eridi.core.config import ConfigError
-from eridi.core.index.search import SearchHit
+from eridi.core.index.search import SearchHit, group_label
 from eridi.core.models import Entry
 from eridi.core.record.store import RecordFolderError
 from eridi.core.service import Eridi, EridiError, file_id
@@ -132,8 +132,7 @@ def hit_json(hit: SearchHit) -> dict[str, Any]:
         out["file_id"] = hit.id
     if hit.path:
         out |= {"path": hit.path, "storage": hit.root_label}
-    if not hit.matched_all:
-        out["partial_match"] = True
+    out["match"] = group_label(hit).lower()
     return out
 
 

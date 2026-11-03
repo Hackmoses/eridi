@@ -22,7 +22,7 @@ from eridi import __version__
 from eridi.core.changes import FileDiff
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
-from eridi.core.index.search import SearchHit
+from eridi.core.index.search import SearchHit, group_label, parse_query
 from eridi.core.models import OUTCOMES, Entry, FileInfo, parse_timestamp
 from eridi.core.record.store import RecordFolderError
 from eridi.core.scan import ScanProgress
@@ -339,7 +339,12 @@ def search_command(
         if not hits:
             out.print(f"Nothing found for {escape(query)!r}.")
             return
+        grouped = len(parse_query(query)) > 1
+        group = None
         for hit in hits:
+            if grouped and group_label(hit) != group:
+                group = group_label(hit)
+                out.print(f"[bold]{escape(group)}[/bold]")
             if hit.kind == "entry":
                 who = f"{hit.author} · {when(hit.created_at or '')}"
                 where = f" · {escape(hit.path)}" if hit.path else ""

@@ -67,8 +67,9 @@ def test_blocking_buffer_finds_protocol_and_note(
     assert note.entry_kind == "note"
     assert note.author == "A. Okafor"
     assert note.title.startswith("Changed the blocking buffer")
-    assert f"{HIGHLIGHT_START}blocking{HIGHLIGHT_END}" in note.snippet
-    assert ("blocking", True) in note.segments()
+    assert f"{HIGHLIGHT_START}blocking buffer{HIGHLIGHT_END}" in note.snippet  # the phrase
+    assert ("blocking buffer", True) in note.segments()
+    assert note.match == "exact"
     protocol = next(h for h in hits if h.path == PROTOCOL_PATH and h.kind == "file")
     assert protocol.root_label == "Lab Drive"
     assert protocol.title == "Western blot: blocking and antibody incubation"
@@ -99,7 +100,7 @@ def test_file_snippet_prefers_text_over_path(
     conn, _ = lab_index
     pdf = next(h for h in search(conn, "blocking buffer") if h.path.endswith(".pdf"))  # type: ignore[union-attr]
     assert "comparison.pdf" not in pdf.plain_snippet
-    assert f"{HIGHLIGHT_START}Blocking{HIGHLIGHT_END}" in pdf.snippet
+    assert f"{HIGHLIGHT_START}Blocking buffer{HIGHLIGHT_END}" in pdf.snippet
 
 
 def test_snippet_rendering(lab_index: tuple[sqlite3.Connection, RecordStore]) -> None:
@@ -241,3 +242,50 @@ def test_search_2000_files_under_100ms(conn: sqlite3.Connection) -> None:
         elapsed = time.perf_counter() - start
         assert hits
         assert elapsed < 0.1, f"{q!r} took {elapsed * 1000:.0f} ms"
+
+
+def test_tiers_exact_then_near_then_all_then_rarest_single_word(
+    conn: sqlite3.Connection,
+) -> None:
+    upsert_root(conn, ROOT)
+    docs = {
+        "1_exact.md": "Loss of myelin protein zero causes neuropathy.",
+        "2_near.md": "The protein content of compact myelin was measured.",
+        "3_all.md": "Myelin sheaths were imaged. "
+        + "Filler text here. " * 30
+        + "Total protein was quantified by BCA.",
+        "4_myelin_only.md": "Myelin thickness increased after treatment.",
+        "5_protein_only.md": "Proteins were separated by SDS-PAGE.",
+        "6_protein_only.md": "Protein loading was normalized to GAPDH.",
+        "7_neither.md": "Nothing relevant.",
+    }
+    for path, text in docs.items():
+        upsert_file(conn, FileInfo(ROOT.id, path, 1, 1.0, ".md", title=""), text)
+    hits = search(conn, "myelin protein")
+    got = [(h.path, h.match, h.term) for h in hits]
+    assert got[:4] == [
+        ("1_exact.md", "exact", None),
+        ("2_near.md", "near", None),
+        ("3_all.md", "all", None),
+        ("4_myelin_only.md", "some", "myelin"),  # the rarer word comes first
+    ]
+    assert sorted(got[4:]) == [  # "Proteins" (plural) counts as protein
+        ("5_protein_only.md", "some", "protein"),
+        ("6_protein_only.md", "some", "protein"),
+    ]
+
+
+def test_plurals_and_word_forms_match(conn: sqlite3.Connection) -> None:
+    upsert_root(conn, ROOT)
+    upsert_file(
+        conn, FileInfo(ROOT.id, "a.md", 1, 1.0, ".md"), "Myelinated axons express proteins."
+    )
+    hits = search(conn, "proteins")
+    assert [h.path for h in hits] == ["a.md"]
+    assert search(conn, "protein")[0].path == "a.md"
+
+
+def test_single_word_has_one_tier(conn: sqlite3.Connection) -> None:
+    upsert_root(conn, ROOT)
+    upsert_file(conn, FileInfo(ROOT.id, "a.md", 1, 1.0, ".md"), "myelin")
+    assert [h.match for h in search(conn, "myelin")] == ["all"]

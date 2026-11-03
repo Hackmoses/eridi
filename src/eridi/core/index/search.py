@@ -12,7 +12,7 @@ characters that never occur in extracted text); use `SearchHit.segments()` or
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 HIGHLIGHT_START = "\x02"
@@ -24,6 +24,13 @@ MIN_PREFIX_LENGTH = 3
 
 _TOKEN_RE = re.compile(r'"([^"]*)"|(\S+)')
 _WORDISH_RE = re.compile(r"\w", re.UNICODE)
+
+
+Match = Literal["exact", "near", "all", "some"]
+MATCH_ORDER: tuple[Match, ...] = ("exact", "near", "all", "some")
+"""exact: the words as a phrase, in order. near: all the words close together, any order.
+all: all the words anywhere. some: only one of the words, rarer words first."""
+NEAR_DISTANCE = 10
 
 
 @dataclass(frozen=True)
@@ -40,7 +47,15 @@ class SearchHit:
     entry_kind: str | None = None
     created_at: str | None = None
     author: str | None = None
-    matched_all: bool = True
+    match: Match = "all"
+    """How it matched; results come in this order (see `MATCH_ORDER`)."""
+    term: str | None = None
+    """For `match == "some"`: the one search word it contains."""
+
+    @property
+    def matched_all(self) -> bool:
+        """It contains every search word (exactly, close together, or anywhere)."""
+        return self.match != "some"
 
     def segments(self) -> list[tuple[str, bool]]:
         """The snippet as (text, highlighted) pieces."""
@@ -57,6 +72,17 @@ class SearchHit:
     @property
     def plain_snippet(self) -> str:
         return self.snippet_with("", "")
+
+
+def group_label(hit: SearchHit) -> str:
+    """A short heading for a result's group, e.g. "Exact phrase" or "Only “myelin”"."""
+    if hit.match == "exact":
+        return "Exact phrase"
+    if hit.match == "near":
+        return "Words close together"
+    if hit.match == "all":
+        return "All words"
+    return f"Only “{hit.term}”"
 
 
 def _quote(term: str) -> str:
@@ -90,10 +116,10 @@ def build_match(query: str, *, any_term: bool = False) -> str | None:
 
 
 def _file_hits(
-    conn: sqlite3.Connection, match: str, limit: int, project: str | None, matched_all: bool
+    conn: sqlite3.Connection, expr: str, limit: int, project: str | None, how: Match
 ) -> list[SearchHit]:
     project_filter = ""
-    params: list[object] = [match]
+    params: list[object] = [expr]
     if project is not None:
         project_filter = (
             "AND EXISTS (SELECT 1 FROM project_roots pr WHERE pr.project_id = ? "
@@ -129,7 +155,7 @@ def _file_hits(
             root_id=r["root_id"],
             root_label=r["root_label"],
             path=r["path"],
-            matched_all=matched_all,
+            match=how,
         )
         for r in rows
     ]
@@ -141,10 +167,10 @@ def _entry_title(text: str, kind: str) -> str:
 
 
 def _entry_hits(
-    conn: sqlite3.Connection, match: str, limit: int, project: str | None, matched_all: bool
+    conn: sqlite3.Connection, expr: str, limit: int, project: str | None, how: Match
 ) -> list[SearchHit]:
     project_filter = "AND e.project_id = ?" if project is not None else ""
-    params: list[object] = [match, *([project] if project is not None else []), limit]
+    params: list[object] = [expr, *([project] if project is not None else []), limit]
     rows = conn.execute(
         f"""
         SELECT e.id, e.kind, e.created_at, e.author_name, e.text,
@@ -174,37 +200,84 @@ def _entry_hits(
             entry_kind=r["kind"],
             created_at=r["created_at"],
             author=r["author_name"],
-            matched_all=matched_all,
+            match=how,
         )
         for r in rows
     ]
 
 
 def _ranked(
-    conn: sqlite3.Connection, match: str, limit: int, project: str | None, *, all_: bool
+    conn: sqlite3.Connection, expr: str, limit: int, project: str | None, how: Match
 ) -> list[SearchHit]:
-    hits = _file_hits(conn, match, limit, project, all_) + _entry_hits(
-        conn, match, limit, project, all_
+    hits = _file_hits(conn, expr, limit, project, how) + _entry_hits(
+        conn, expr, limit, project, how
     )
     hits.sort(key=lambda h: (h.score, h.kind != "entry", h.id))
     return hits[:limit]
 
 
+def _term_expr(text: str, prefix: bool) -> str:
+    return _quote(text) + ("*" if prefix else "")
+
+
+def _rarity(conn: sqlite3.Connection, expr: str) -> int:
+    """How many files and entries contain a term (fewer = more specific)."""
+    total = 0
+    for table in ("files_fts", "entries_fts"):
+        row = conn.execute(
+            f"SELECT count(*) FROM {table} WHERE {table} MATCH ?",  # noqa: S608 - fixed names
+            (expr,),
+        ).fetchone()
+        total += int(row[0])
+    return total
+
+
+def match_tiers(conn: sqlite3.Connection, query: str) -> list[tuple[Match, str, str | None]]:
+    """The FTS queries to run, best match first: (how, expression, single term)."""
+    terms = parse_query(query)
+    if not terms:
+        return []
+    last_text, last_is_phrase = terms[-1]
+    prefix = [False] * len(terms)
+    prefix[-1] = not last_is_phrase and len(last_text) >= MIN_PREFIX_LENGTH
+    parts = [_term_expr(text, p) for (text, _), p in zip(terms, prefix, strict=True)]
+    tiers: list[tuple[Match, str, str | None]] = []
+    if len(terms) >= 2:
+        phrase = " ".join(text for text, _ in terms)
+        tiers.append(("exact", _term_expr(phrase, prefix[-1]), None))
+        tiers.append(("near", f"NEAR({' '.join(parts)}, {NEAR_DISTANCE})", None))
+    tiers.append(("all", " ".join(parts), None))
+    if len(terms) >= 2:
+        singles = sorted(
+            enumerate(zip(terms, parts, strict=True)),
+            key=lambda item: (_rarity(conn, item[1][1]), item[0]),
+        )
+        tiers += [("some", part, text) for _, ((text, _), part) in singles]
+    return tiers
+
+
 def search(
     conn: sqlite3.Connection, query: str, limit: int = 20, project: str | None = None
 ) -> list[SearchHit]:
-    """Search files and the record. Never raises on user input; empty input finds nothing."""
-    match_all = build_match(query)
-    if match_all is None or limit <= 0:
+    """Search files and the record. Never raises on user input; empty input finds nothing.
+
+    Results come in tiers: the exact phrase, then all the words close together, then all
+    the words anywhere, then each single word on its own, rarest word first. Within a tier,
+    results are ranked by relevance (BM25), with record entries slightly ahead of files.
+    """
+    if limit <= 0:
         return []
-    hits = _ranked(conn, match_all, limit, project, all_=True)
-    if len(hits) < limit and len(parse_query(query)) > 1:
-        match_any = build_match(query, any_term=True) or match_all
-        seen = {(h.kind, h.id) for h in hits}
-        extra = [
-            h
-            for h in _ranked(conn, match_any, limit, project, all_=False)
-            if (h.kind, h.id) not in seen
-        ]
-        hits += extra[: limit - len(hits)]
+    hits: list[SearchHit] = []
+    seen: set[tuple[str, str]] = set()
+    for how, expr, term in match_tiers(conn, query):
+        if len(hits) >= limit:
+            break
+        for hit in _ranked(conn, expr, limit, project, how):
+            key = (hit.kind, hit.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            hits.append(replace(hit, term=term) if term else hit)
+            if len(hits) >= limit:
+                break
     return hits

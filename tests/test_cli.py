@@ -271,3 +271,10 @@ def test_parser_warnings_never_reach_the_terminal(lab: SampleLab) -> None:
         warnings.simplefilter("always")
         assert extract("x.warny", b"").text == "fine"
     assert caught == []
+
+
+def test_search_groups_results(lab: SampleLab) -> None:
+    out = ok("search", "blocking buffer")
+    assert out.index("Exact phrase") < out.index("Blocking buffer comparison")
+    assert "Only “blocking”" in out  # the docx protocol has "blocking" but not "buffer"
+    assert "Exact phrase" not in ok("search", "milk")  # one word: no groups
