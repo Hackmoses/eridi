@@ -354,3 +354,58 @@ def test_slow_files_are_reported(lab: Lab, monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(scan_module, "examine", slow)
     report = lab.scan()
     assert report.slow == [(PROTOCOL, 12.0)]
+
+
+def test_workers_start_however_eridi_was_launched(tmp_path: Path) -> None:
+    """Windows .exe launchers (and `python -`) leave a main script workers can't re-run."""
+    import subprocess
+    import sys
+    import textwrap
+
+    folder = tmp_path / "files"
+    _many_files_in(folder, 60)
+    script = textwrap.dedent(f"""
+        from pathlib import Path
+        from eridi.connectors.local import LocalConnector
+        from eridi.core.config import Settings
+        from eridi.core.index.db import open_index
+        from eridi.core.models import Root
+        from eridi.core.scan import scan_root
+        from eridi.core.snapshots import SnapshotStore
+        folder = Path({str(folder)!r})
+        report = scan_root(open_index(Path(":memory:")), Root("r", "R", str(folder)),
+                           LocalConnector(folder, "r"), SnapshotStore(folder.parent / "s"),
+                           Settings(scan_workers=2))
+        print("workers", report.workers, "new", len(report.new))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-"],
+        input=script,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "workers 2 new 60" in result.stdout
+    assert "stopped unexpectedly" not in result.stderr
+
+
+def _many_files_in(folder: Path, n: int) -> None:
+    folder.mkdir(parents=True)
+    for i in range(n):
+        (folder / f"note_{i:03d}.md").write_text(f"# Note {i}\n", encoding="utf-8")
+
+
+def test_copies_of_indexed_files_are_not_read_again(lab: Lab) -> None:
+    lab.scan()
+    copy = lab.sample.root / "Protocols" / "Western_blot_blocking_v7 - Copy.docx"
+    copy.write_bytes(lab.sample.protocol_docx.read_bytes())
+    report = lab.scan()
+    assert report.new == ["Protocols/Western_blot_blocking_v7 - Copy.docx"]
+    assert report.extracted == 0  # its text was copied from the original
+    stored = get_file(lab.conn, lab.root.id, "Protocols/Western_blot_blocking_v7 - Copy.docx")
+    original = get_file(lab.conn, lab.root.id, PROTOCOL)
+    assert stored is not None and original is not None
+    assert stored.text_sha256 == original.text_sha256
+    assert stored.title == original.title  # a title from the contents carries over

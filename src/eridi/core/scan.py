@@ -14,11 +14,13 @@ interrupted scan keeps its progress.
 """
 
 import concurrent.futures as futures
+import contextlib
 import logging
 import multiprocessing
 import os
 import pickle
 import sqlite3
+import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
@@ -131,6 +133,8 @@ class Examined:
     """The bytes were read (False: skipped, or the read failed)."""
     extracted: bool
     seconds: float = 0.0
+    duplicate: bool = False
+    """Same bytes as a file already indexed: its text is copied, not extracted again."""
 
 
 def examine(
@@ -148,14 +152,22 @@ def examine(
     sha = sha256_bytes(data)
     if old_sha is not None and sha == old_sha:
         return Examined(sha, None, read=True, extracted=False)
+    if sha in _KNOWN:
+        return Examined(sha, None, read=True, extracted=False, duplicate=True)
     result = extract(remote.path.rsplit("/", 1)[-1], data)
     return Examined(sha, result, read=True, extracted=True,
                     seconds=time.perf_counter() - started)  # fmt: skip
 
 
-def _quiet_worker() -> None:
-    """Runs first in each worker: parsers' warnings about odd files are noise to users and
+_KNOWN: frozenset[str] = frozenset()
+"""Content hashes whose text is already in the index (set in each worker at start)."""
+
+
+def _init_worker(known: frozenset[str]) -> None:
+    """Runs first in each worker. Parsers' warnings about odd files are noise to users and
     would otherwise print straight to the terminal."""
+    global _KNOWN
+    _KNOWN = known
     root = logging.getLogger()
     root.handlers[:] = [logging.NullHandler()]
     root.setLevel(logging.CRITICAL)
@@ -173,12 +185,43 @@ def _picklable(connector: Connector) -> bool:
 Job = tuple[RemoteFile, FileInfo | None]
 
 
+@contextlib.contextmanager
+def _main_module_hidden() -> Iterator[None]:
+    """Let worker processes start however Eridi was launched.
+
+    "spawn" workers re-run the parent's main script. That breaks when it isn't an
+    importable file: Windows .exe launchers, `python -` and some app bundles. Workers only
+    need `eridi.core.scan`, so hide the main script from them while the pool runs.
+    """
+    main = sys.modules.get("__main__")
+    saved = dict(vars(main)) if main is not None else {}
+    try:
+        if main is not None:
+            vars(main).pop("__file__", None)
+            main.__spec__ = None
+        yield
+    finally:
+        if main is not None:
+            for key in ("__file__", "__spec__"):
+                if key in saved:
+                    vars(main)[key] = saved[key]
+
+
 def _examine_all(
-    connector: Connector, jobs: list[Job], settings: Settings, workers: int
+    connector: Connector,
+    jobs: list[Job],
+    settings: Settings,
+    report: ScanReport,
+    known: frozenset[str] = frozenset(),
 ) -> Iterator[tuple[RemoteFile, FileInfo | None, Examined]]:
-    """Examine every job, in parallel when it's worth it. Yields as files finish."""
+    """Examine every job, in parallel when it's worth it. Yields as files finish.
+
+    Sets `report.workers` to the number of processes that actually did the work."""
+    global _KNOWN
+    _KNOWN = known  # for files examined in this process
     size_limit = settings.size_limit_bytes
     placeholders = settings.read_online_only_files
+    workers = worker_count(settings)
 
     def here(job: Job) -> Examined:
         remote, old = job
@@ -186,13 +229,20 @@ def _examine_all(
                        placeholders)  # fmt: skip
 
     if workers <= 1 or len(jobs) < PARALLEL_MIN_FILES or not _picklable(connector):
+        report.workers = 1
         for job in jobs:
             yield job[0], job[1], here(job)
         return
 
     # "spawn" behaves the same on every OS and is safe while other threads are running.
+    report.workers = workers
+    hidden = _main_module_hidden()
+    hidden.__enter__()
     pool = futures.ProcessPoolExecutor(
-        workers, mp_context=multiprocessing.get_context("spawn"), initializer=_quiet_worker
+        workers,
+        mp_context=multiprocessing.get_context("spawn"),
+        initializer=_init_worker,
+        initargs=(known,),
     )
     queue = iter(jobs)
     running: dict[futures.Future[Examined], Job] = {}
@@ -224,12 +274,14 @@ def _examine_all(
     except futures.process.BrokenProcessPool:
         # A worker crashed (e.g. a parser bug on one odd file). Finish without workers.
         log.warning("Scan workers stopped unexpectedly; finishing in one process.")
+        report.workers = 1
         pool.shutdown(wait=False, cancel_futures=True)
         for job in [*running.values(), *queue]:
             yield job[0], job[1], here(job)
         return
     finally:
         pool.shutdown(wait=False, cancel_futures=True)
+        hidden.__exit__(None, None, None)
 
 
 def scan_root(
@@ -292,10 +344,10 @@ def scan_root(
     jobs.sort(key=lambda job: job[0].size)
     bytes_total = sum(job[0].size for job in jobs)
     bytes_done = 0
-    report.workers = worker_count(settings)
+    known = _texts_known(conn) if jobs else frozenset()
     try:
         for done, (remote, old, examined) in enumerate(
-            _examine_all(connector, jobs, settings, report.workers)
+            _examine_all(connector, jobs, settings, report, known)
         ):
             bytes_done += remote.size
             if examined.seconds >= SLOW_SECONDS:
@@ -338,6 +390,31 @@ def scan_root(
     report.slow = sorted(report.slow, key=lambda s: -s[1])[:10]
     report.seconds = time.perf_counter() - started
     return report
+
+
+def _texts_known(conn: sqlite3.Connection) -> frozenset[str]:
+    """Content hashes of files whose text is already indexed, so copies aren't re-read."""
+    rows = conn.execute(
+        "SELECT DISTINCT content_sha256 FROM files WHERE content_sha256 IS NOT NULL "
+        "AND extract_status IN ('ok', 'needs_ocr') LIMIT 1000000"
+    )
+    return frozenset(r[0] for r in rows)
+
+
+def _copied_result(conn: sqlite3.Connection, content_sha: str, path: str) -> ExtractResult:
+    """The indexed text of another file with these exact bytes."""
+    row = conn.execute(
+        "SELECT f.title, f.extract_status, t.body, f.path FROM files f "
+        "JOIN files_fts t ON t.rowid = f.id WHERE f.content_sha256 = ? "
+        "AND f.extract_status IN ('ok', 'needs_ocr') LIMIT 1",
+        (content_sha,),
+    ).fetchone()
+    if row is None:  # gone since the scan started: an empty result is safe; next scan fixes
+        return ExtractResult("", _stem(path), "name_only")
+    title = row[0]
+    if title == _stem(row[3]):  # a title taken from the other file's name, not its contents
+        title = _stem(path)
+    return ExtractResult(row[2] or "", title, row[1])
 
 
 def _pending_row(root: Root, remote: RemoteFile, now: str) -> FileInfo:
@@ -387,6 +464,10 @@ def _apply(
         placeholder=remote.is_placeholder,
         last_seen=now,
     )
+    if examined.duplicate and examined.content_sha256 is not None:
+        examined = replace(
+            examined, result=_copied_result(conn, examined.content_sha256, remote.path)
+        )
     if examined.result is None:
         # Touched or re-saved with identical bytes: update the metadata, keep the text.
         assert old is not None  # noqa: S101 - only files we had can have unchanged bytes
