@@ -604,6 +604,7 @@ async function renderProject(params) {
       el("button", { type: "submit" }, "Save")));
 
   const saving = savePanel(p, fail);
+  const views = viewsPanel(p);
 
   const changes = p.changes.length ? el("section", { "aria-labelledby": "changes-h" },
     el("h2", { id: "changes-h" }, "Needs a why"),
@@ -621,8 +622,58 @@ async function renderProject(params) {
       e.kind === "project" ? el("p", { class: "muted" }, `Project "${e.project_name}" · ${e.author} · ${when(e.created_at)}`)
         : entryCard(e, null, again)))));
 
-  main.append(...[heading, renameForm, message, search, results, changes, saving, folders, files, noteForm, timeline]
+  main.append(...[heading, renameForm, message, search, results, views, changes, saving, folders, files, noteForm, timeline]
     .filter(Boolean));
+}
+
+// --- the "did it work?" views ---
+
+function viewsPanel(p) {
+  const panel = el("div", { class: "view-panel", "aria-live": "polite" });
+  const q = "project=" + encodeURIComponent(p.id);
+  const tabs = el("div", { class: "tabs", role: "group", "aria-label": "Views" });
+  const show = async (button, load) => {
+    tabs.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === button)));
+    try { panel.replaceChildren(await load()); } catch (error) { showError(panel, error); }
+  };
+  const tab = (label, load) => {
+    const b = el("button", { type: "button", class: "secondary", "aria-pressed": "false", onclick: () => show(b, load) }, label);
+    tabs.append(b);
+  };
+  const empty = (text) => el("p", { class: "muted" }, text);
+  tab("This month", async () => {
+    const d = await api("/views/month?" + q);
+    const c = d.counts;
+    return el("div", {},
+      el("p", { class: "meta" }, `${d.period.label} · ${c.edited} edited · ${c.added} added · ${c.needs_why} need a why · ${c.worked} worked · ${c.partial} partly · ${c.failed} failed`),
+      d.changes.length || d.entries.length ? el("ul", { class: "results" },
+        d.changes.map((a) => el("li", { class: "result" },
+          el("div", { class: "title" }, el("span", { class: "tag" }, a.kind === "edited" ? "Edited" : "Added"), historyLink(a.file_id, a.path),
+            a.needs_why ? el("span", { class: "outcome" }, "needs a why") : null),
+          a.summary ? el("div", { class: "meta" }, a.summary) : null,
+          a.explanations.map((e) => el("p", {}, e.text, " ", outcomeBadge(e.result))))),
+        d.entries.filter((e) => e.kind !== "project").map((e) => el("li", {}, entryCard(e, null))))
+        : empty("Nothing changed this month."));
+  });
+  tab("Failed", async () => {
+    const d = await api("/views/failed?" + q);
+    return d.failures.length ? el("ul", { class: "results" }, d.failures.map((f) => el("li", { class: "result" },
+      el("div", { class: "title" }, f.file ? historyLink(f.file, f.path) : el("span", {}, f.entry.kind)),
+      entryCard(f.entry, f.file),
+      f.judged_by.id !== f.entry.id && f.judged_by.text ? el("p", { class: "meta" }, "Failed: " + f.judged_by.text + " — " + f.judged_by.author) : null)))
+      : empty("Nothing recorded as failed.");
+  });
+  tab("Open questions", async () => {
+    const d = await api("/views/questions?" + q);
+    const again = () => tabs.querySelectorAll("button")[2].click();
+    return d.questions.length ? el("ul", { class: "results" }, d.questions.map((item) => el("li", { class: "result" },
+      item.kind === "no_why"
+        ? el("div", {}, el("div", { class: "title" }, historyLink(item.change.file_id, item.change.path), el("span", { class: "outcome" }, "needs a why")),
+            el("div", { class: "meta" }, (item.change.summary || "Text changed") + " · " + ago(item.since)))
+        : el("div", {}, el("div", { class: "meta" }, ago(item.since)), entryCard(item.entry, null, again)))))
+      : empty(`No open questions older than ${d.days} days.`);
+  });
+  return el("section", { "aria-labelledby": "views-h" }, el("h2", { id: "views-h", class: "visually-hidden" }, "Views"), tabs, panel);
 }
 
 // --- saving files into a project (outbox) ---

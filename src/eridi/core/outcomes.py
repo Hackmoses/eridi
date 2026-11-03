@@ -1,9 +1,9 @@
 """Did it work? The current outcome of each entry and each file version.
 
-An outcome comes from, newest first:
-1. an `outcome` entry that targets the entry (`target_id`), or targets the file version the
-   entry explains (a subject with that `text_sha256`);
-2. the entry's own `outcome` field (a note saved with "worked").
+An entry's outcome is the newest of:
+- an `outcome` entry that targets it (`target_id`), or targets the file version it explains
+  (a subject with that `text_sha256`);
+- the entry's own `outcome` field (a note saved with "worked").
 
 A file version's outcome is the newest `outcome` entry about that version, else the
 outcome of the newest note that explains it. Only current entries count: a corrected or
@@ -68,11 +68,9 @@ class Outcomes:
             found = self.by_version.get(sha)
             if found is not None and found.entry.kind == "outcome":
                 candidates.append(found)
-        if candidates:
-            return max(candidates, key=lambda v: v.entry.id)
-        if entry.outcome:
-            return Verdict(entry.outcome, entry)
-        return None
+        if entry.outcome:  # what the entry itself says competes by date like the rest
+            candidates.append(Verdict(entry.outcome, entry))
+        return max(candidates, key=lambda v: v.entry.id) if candidates else None
 
     def outcome_of(self, entry: Entry) -> str | None:
         verdict = self.for_entry(entry)

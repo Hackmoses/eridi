@@ -195,3 +195,32 @@ def test_quick_outcome_buttons(browser: Any, sample_lab: SampleLab, tmp_path: Pa
             page.wait_for_selector(".entry .outcome-worked")
             assert errors == []
         assert eridi.outcomes().outcome_of(note) == "worked"
+
+
+def test_project_views(browser: Any, sample_lab: SampleLab, tmp_path: Path) -> None:
+    """M13.2: This month, Failed and Open questions on a project page."""
+    with Eridi() as eridi:
+        eridi.init("A. Okafor", None, tmp_path / "record")
+        root = eridi.add_root(sample_lab.root, "Lab Drive")
+        eridi.create_project("Blots", folders=[f"{root.id}:Protocols"])
+        eridi.scan()
+        doc = Document(str(sample_lab.protocol_docx))
+        doc.paragraphs[2].text = "Primary antibody incubation: 2 h at RT."
+        doc.save(str(sample_lab.protocol_docx))
+        eridi.scan()
+        note = eridi.add_note("New lot needs longer.", file=PROTOCOL)
+        eridi.add_outcome("failed", entry_id=note.id)
+        with live_server(eridi) as (port, guard):
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(f"http://127.0.0.1:{port}/?t={guard.new_link()}")
+            page.get_by_role("link", name="Blots").click()
+            page.get_by_role("button", name="This month").click()
+            page.wait_for_selector(".view-panel >> text=1 edited")
+            assert "New lot needs longer." in page.inner_text(".view-panel")
+            page.locator(".tabs").get_by_role("button", name="Failed").click()
+            page.wait_for_selector(".view-panel .outcome-failed")
+            page.get_by_role("button", name="Open questions").click()
+            page.wait_for_selector(".view-panel >> text=No open questions")
+            assert errors == []

@@ -46,6 +46,8 @@ class Settings:
     microsoft_client_id: str = ""
     """The Microsoft Entra app ID used to sign in to OneDrive and SharePoint; empty uses
     Eridi's own. The `ERIDI_MS_CLIENT_ID` environment variable overrides both."""
+    open_question_days: int = 14
+    """A change or decision with no outcome after this many days is an open question."""
     google_client_id: str = ""
     """The Google desktop-app OAuth client for Google Drive; empty uses Eridi's own.
     `ERIDI_GOOGLE_CLIENT_ID` overrides both."""
@@ -147,6 +149,8 @@ def _parse(path: Path, data: dict[str, Any]) -> Config:
         _bad(path, "settings.scan_workers", "must not be negative (0 means automatic)")
     if settings.scan_interval_minutes < 0:
         _bad(path, "settings.scan_interval_minutes", "must not be negative")
+    if settings.open_question_days < 0:
+        _bad(path, "settings.open_question_days", "must not be negative")
     if settings.snapshot_cap_mb < 0:
         _bad(path, "settings.snapshot_cap_mb", "must not be negative")
 

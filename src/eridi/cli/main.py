@@ -32,6 +32,7 @@ from eridi.core.index.search import SearchHit, group_label, parse_query
 from eridi.core.models import DATA_LABELS, OUTCOMES, Entry, FileInfo, Project, parse_timestamp
 from eridi.core.outbox import OutboxJob
 from eridi.core.record.store import RecordFolderError
+from eridi.core.reports import Period, days_period, month_period
 from eridi.core.scan import ScanProgress, ScanReport
 from eridi.core.service import (
     AmbiguousFileError,
@@ -919,6 +920,122 @@ def dismiss(
             raise EridiError(f"{info.path} has no change waiting for a why.")
         eridi.dismiss(pending)
         console().print(f"Dismissed the change to {escape(info.path)}.")
+
+
+def make_period(month: str | None, since: str | None) -> Period:
+    try:
+        return days_period(since) if since else month_period(month)
+    except ValueError as exc:
+        raise EridiError(str(exc)) from None
+
+
+def result_text(result: str | None) -> str:
+    color = {"worked": "green", "partial": "yellow", "failed": "red"}.get(result or "", "dim")
+    return f" [{color}]{result}[/{color}]" if result else ""
+
+
+@app.command()
+def month(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    month_: Annotated[
+        str | None, typer.Option("--month", help="Which month, YYYY-MM (default: this one).")
+    ] = None,
+    since: Annotated[
+        str | None, typer.Option(help="Instead of a month: everything since YYYY-MM-DD.")
+    ] = None,
+) -> None:
+    """What changed in a project this month: edits, new files, notes, and whether they worked."""
+    with session() as eridi:
+        report = eridi.project_period(project, make_period(month_, since))
+        out = console()
+        c = report.counts
+        out.print(f"[bold]{escape(report.project.name)}[/bold] · {report.period.label}")
+        out.print(
+            f"[dim]{c['edited']} edited · {c['added']} added · {c['needs_why']} need a why · "
+            f"{c['notes']} notes · {c['worked']} worked · {c['partial']} partly · "
+            f"{c['failed']} failed[/dim]"
+        )
+        if report.changes:
+            out.print("[bold]Files[/bold]")
+        for a in report.changes:
+            what = "Edited" if a.kind == "edited" else "Added"
+            out.print(f"  {when(a.at)}  {what} {escape(a.path)}"
+                      + ("  [yellow]needs a why[/yellow]" if a.needs_why else ""))  # fmt: skip
+            if a.summary:
+                out.print(f"    [dim]{escape(a.summary)}[/dim]")
+            for e in a.explanations:
+                out.print(f"    {escape(e.text)}{result_text(report.results.get(e.entry_id))}")
+        if report.entries:
+            out.print("[bold]Record[/bold]")
+        for entry in report.entries:
+            result = result_text(report.results.get(entry.id))
+            out.print(f"  {escape(describe_entry(eridi, entry))}{result}  [dim]{entry.id}[/dim]")
+            if entry.text:
+                out.print(f"    {escape(entry.text)}")
+        if not report.changes and not report.entries:
+            out.print("Nothing changed in this period.")
+
+
+@app.command()
+def failed(
+    file: Annotated[
+        str | None, typer.Argument(help="A file (all its versions); default: everything.")
+    ] = None,
+    project: Annotated[str | None, typer.Option(help="Only this project.")] = None,
+) -> None:
+    """Everything that failed: with one protocol, in a project, or everywhere."""
+    with session() as eridi:
+        ref = file_id(pick_file(eridi, file)) if file is not None else None
+        found = eridi.failures(file=ref, project=project)
+        out = console()
+        if not found:
+            out.print("Nothing recorded as failed.")
+        for f in found:
+            e, judged = f.entry, f.verdict.entry
+            where = f"  {escape(f.path)}" if f.path else ""
+            out.print(f"{when(judged.created_at)}{where}  [dim]{e.id}[/dim]")
+            if e.text:
+                out.print(f"  {escape(e.text)}")
+            if judged.id != e.id and judged.text:
+                out.print(
+                    f"  [red]Failed:[/red] {escape(judged.text)} [dim]({judged.author.name})[/dim]"
+                )
+            elif judged.id != e.id or e.kind == "outcome":
+                out.print(f"  [red]Failed[/red] [dim]({judged.author.name})[/dim]")
+
+
+@app.command()
+def questions(
+    project: Annotated[str | None, typer.Option(help="Only this project.")] = None,
+    days: Annotated[
+        int | None,
+        typer.Option(min=0, help="Older than this many days (default: settings, 14)."),
+    ] = None,
+) -> None:
+    """Open questions: changes and decisions with no outcome yet, and changes with no why."""
+    with session() as eridi:
+        found = eridi.open_questions(project=project, days=days)
+        out = console()
+        if not found:
+            out.print("No open questions.")
+        for q in found:
+            age = ago(q.since)
+            if q.kind == "no_why":
+                assert q.change is not None  # noqa: S101 - set for no_why
+                out.print(
+                    f"{escape(q.change.path)}  [yellow]needs a why[/yellow]  [dim]{age}[/dim]"
+                )
+                if q.change.summary:
+                    out.print(f"  [dim]{escape(q.change.summary)}[/dim]")
+                continue
+            assert q.entry is not None  # noqa: S101 - set for no_outcome
+            where = escape(q.path) if q.path else escape(q.entry.kind.capitalize())
+            out.print(f"{where}  [cyan]did it work?[/cyan]  [dim]{age} · {q.entry.id}[/dim]")
+            out.print(f"  {escape(q.entry.text)}")
+        if found:
+            out.print(
+                "[dim]Record a result: eridi outcome <entry ID or file> worked|partial|failed[/dim]"
+            )
 
 
 @app.command("history")

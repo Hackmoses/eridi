@@ -17,6 +17,7 @@ from eridi.core.models import Entry, FileInfo, Project, Root
 from eridi.core.outbox import OutboxJob
 from eridi.core.outcomes import Outcomes
 from eridi.core.record.store import RecordFolderError
+from eridi.core.reports import Period, days_period, month_period
 from eridi.core.service import (
     AmbiguousFileError,
     Eridi,
@@ -562,6 +563,93 @@ def add_microsoft_storage(request: Request, body: MicrosoftDriveIn) -> Any:
         return error(exc)
     _scanner(request).request()  # read it right away
     return JSONResponse(root_json(root, None), status_code=201)
+
+
+# --- the "did it work?" views ---
+
+
+def _period(month: str | None, since: str | None) -> Period:
+    try:
+        return days_period(since) if since else month_period(month)
+    except ValueError as exc:
+        raise EridiError(str(exc)) from None
+
+
+@router.get("/views/month")
+def view_month(
+    request: Request, project: str, month: str | None = None, since: str | None = None
+) -> Any:
+    eridi = _eridi(request)
+    try:
+        r = eridi.project_period(project, _period(month, since))
+        outcomes = eridi.outcomes()
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return {
+        "project": project_json(eridi, r.project),
+        "period": {"since": r.period.since, "until": r.period.until, "label": r.period.label},
+        "counts": r.counts,
+        "changes": [
+            {
+                **activity_json(a),
+                "explanations": [
+                    {
+                        "id": e.entry_id,
+                        "text": e.text,
+                        "author": e.author,
+                        "result": r.results.get(e.entry_id),
+                    }
+                    for e in a.explanations
+                ],
+            }
+            for a in r.changes
+        ],
+        "entries": [entry_json(eridi, e, "current", outcomes) for e in r.entries],
+    }
+
+
+@router.get("/views/failed")
+def view_failed(request: Request, file: str | None = None, project: str | None = None) -> Any:
+    eridi = _eridi(request)
+    try:
+        found = eridi.failures(file=file, project=project)
+        outcomes = eridi.outcomes()
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return {
+        "failures": [
+            {
+                "entry": entry_json(eridi, f.entry, "current", outcomes),
+                "judged_by": entry_json(eridi, f.verdict.entry, "current", outcomes),
+                "file": f"{f.root_id}:{f.path}" if f.root_id and f.path else None,
+                "path": f.path,
+            }
+            for f in found
+        ]
+    }
+
+
+@router.get("/views/questions")
+def view_questions(request: Request, project: str | None = None, days: int | None = None) -> Any:
+    eridi = _eridi(request)
+    try:
+        found = eridi.open_questions(project=project, days=days)
+        outcomes = eridi.outcomes()
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return {
+        "days": eridi.config.settings.open_question_days if days is None else days,
+        "questions": [
+            {
+                "kind": q.kind,
+                "since": q.since,
+                "path": q.path,
+                "entry": entry_json(eridi, q.entry, "current", outcomes) if q.entry else None,
+                "change": change_json(q.change) if q.change else None,
+            }
+            for q in found
+        ],
+    }
 
 
 MAX_SAVE_BYTES = 500 * 1024 * 1024

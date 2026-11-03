@@ -252,3 +252,5 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .switch.flag { color: var(--del-fg); font-weight: 600; }
 .quick-outcome { display: flex; gap: .4rem; flex-wrap: wrap; margin: .35rem 0; }
 button.small { padding: .15rem .55rem; font-size: .85em; }
+.tabs { display: flex; gap: .5rem; flex-wrap: wrap; margin: .75rem 0 .5rem; }
+.tabs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }

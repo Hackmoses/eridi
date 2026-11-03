@@ -100,6 +100,15 @@ from eridi.core.record.store import (
     conflict_original,
 )
 from eridi.core.record.views import HistoryItem, history
+from eridi.core.reports import (
+    Failure,
+    OpenQuestion,
+    Period,
+    ProjectPeriod,
+    failures,
+    month_period,
+    open_questions,
+)
 from eridi.core.scan import Progress, ScanReport, scan_files, scan_root
 from eridi.core.snapshots import SnapshotStore
 
@@ -1154,6 +1163,73 @@ class Eridi:
                 self.pending_changes(project.id),
                 self.recent(limit, project=project.id),
             )
+
+    # --- the "did it work?" views (M13) ---
+
+    def _entries_where(self, condition: str, params: list[object]) -> list[Entry]:
+        rows = self.conn.execute(
+            "SELECT json FROM entries WHERE state = 'current' AND kind != 'tombstone' "  # noqa: S608
+            f"AND {condition} ORDER BY id",
+            params,
+        ).fetchall()
+        return [parse_entry(json.loads(r[0])) for r in rows]
+
+    def project_period(self, ref: str, period: Period | None = None) -> ProjectPeriod:
+        """What changed in a project over a period (default: this calendar month)."""
+        period = period or month_period()
+        with self._lock:
+            self._refresh_records()
+            project = self._get_project(ref)
+            ids = {f.id for f in self.project_files(project.id)}
+            changes = [
+                a
+                for a in recent_activity(self.conn, self.snapshots,
+                                         self._config.dismissed_changes, 100_000, period.since)
+                if a.file_id in ids and a.at < period.until
+            ]  # fmt: skip
+            entries = self._entries_where(
+                "created_at >= ? AND created_at < ? AND " + entry_in_project_sql("entries"),
+                [period.since, period.until, project.id, project.id],
+            )
+            outcomes = self.outcomes()
+            explained = [e.entry_id for a in changes for e in a.explanations]
+            results: dict[str, str | None] = {e.id: outcomes.outcome_of(e) for e in entries}
+            for entry_id in explained:
+                found = self._get_entry(entry_id)
+                if found is not None:
+                    results[entry_id] = outcomes.outcome_of(found)
+            return ProjectPeriod(project, period, changes, list(reversed(entries)), results)
+
+    def failures(self, *, file: str | None = None, project: str | None = None) -> list[Failure]:
+        """Everything that failed, about one file (all its versions and earlier names) or in
+        a project, or everywhere; newest first."""
+        with self._lock:
+            self._refresh_records()
+            if file is not None:
+                entries = [i.entry for i in self.file_history(file).entries if i.state == "current"]
+            elif project is not None:
+                pid = self._get_project(project).id
+                entries = self._entries_where(entry_in_project_sql("entries"), [pid, pid])
+            else:
+                entries = self._entries_where("1 = 1", [])
+            return failures(entries, self.outcomes())
+
+    def open_questions(
+        self, *, project: str | None = None, days: int | None = None
+    ) -> list[OpenQuestion]:
+        """Changes and decisions with no outcome after `days` (default: the setting), and
+        changes still without a why; oldest first."""
+        days = self._config.settings.open_question_days if days is None else days
+        if days < 0:
+            raise EridiError("Days must not be negative.")
+        with self._lock:
+            self._refresh_records()
+            pid = self._get_project(project).id if project is not None else None
+            if pid is not None:
+                entries = self._entries_where(entry_in_project_sql("entries"), [pid, pid])
+            else:
+                entries = self._entries_where("1 = 1", [])
+            return open_questions(entries, self.pending_changes(pid), self.outcomes(), days)
 
     # --- scanning and the index ---
 
