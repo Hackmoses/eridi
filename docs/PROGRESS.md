@@ -15,7 +15,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - [ ] **GATE A**: two weeks, two people
 
 ## Phase B — v0.5
-- [ ] **M8 Projects**: [x] 1 project entries and folders · [x] 2 CLI and UI · [ ] 3 scoped notes and search
+- [x] **M8 Projects**: [x] 1 project entries and folders · [x] 2 CLI and UI · [x] 3 scoped notes and search
 - [ ] M9 Shared record and watching (file watcher pulled forward on 2026-11-03; shared record still to do)
 - [ ] M10 Microsoft connector
 
@@ -66,3 +66,4 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - 2026-11-03 Search results now show each file's story: "edited 2 days ago · 3 versions · 2 notes · needs a why" (`SearchHit.stats` / `FileStats`, in the terminal, web app, API and MCP). Notes count includes the file's earlier paths. Adds under 2 ms to a search.
 - 2026-11-03 M8.1: a project's folders live in the record (optional `project.folders` on `project` entries, documented in RECORD_FORMAT.md), so `project_roots` is rebuilt from the record like everything else. Each `project` entry carries the full folder list; one without `folders` keeps the previous list. Entries belong to a project if they name it or are about a file in its folders. Projects are found by ID or name (exact, start, or part). `Eridi` gains `create_project`, `rename_project`, `set_project_home`, `add_project_folder`, `remove_project_folder`, `list_projects`, `get_project`, `project_files`, `projects_for`, `project_overview`. A note about a file without `project=` joins the file's project (most specific folder wins); `search`, `pending_changes` and `recent` accept a project name or ID.
 - 2026-11-03 M8.2: commands `eridi project new|list|add-folder|remove-folder|rename|home|show` (`new` takes `--folder` and `--home`). A folder is a path, a storage name (all of it) or `<storage ID>:<folder>`. API: `GET/POST /api/projects`, `GET/PATCH /api/projects/{id}`, `POST /api/projects/{id}/folders` and `/folders/remove`; `project` parameter on search, changes, recent and notes. UI: a Projects sidebar (a row above the page on narrow screens) with "New project", and a project page: search inside it, needs a why, folders (add/remove), files from all storage, add a note, record timeline. The page shows up to 500 files.
+- 2026-11-03 M8.3: `--project` on `search`, `changes`, `recent` and `note`; `why`/`note --file` put the note in the file's project automatically and say which. MCP: new read-only `list_projects` tool; `search` takes `project`; `list_recent`/`pending_changes` accept a name or ID; entries show their project. The plan has no Human check for M8.

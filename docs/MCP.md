@@ -73,10 +73,11 @@ All tools are read-only unless you allow writing.
 
 | Tool | What it does |
 |---|---|
-| `search(query, limit)` | Files and record entries together, with highlighted snippets. Quotes make a phrase. |
+| `search(query, limit, project?)` | Files and record entries together, with highlighted snippets. Quotes make a phrase. |
 | `file_history(file)` | A file's text versions, renames, and every entry about it, including corrected and retracted ones (labeled). |
 | `get_entry(entry_id)` | One record entry. |
 | `list_recent(project?, kind?, limit)` | The newest current entries. |
+| `list_projects()` | The lab's projects and the storage folders that belong to each. Other tools take a project's name or ID. |
 | `pending_changes(project?)` | Changed files nobody has explained yet, with a one-line summary of each change. |
 | `show_diff(file, from_version?, to_version?)` | What changed in a file, as a line diff. |
 | `add_note(text, file?, outcome?, project?)` | Only when writing is allowed (below). |

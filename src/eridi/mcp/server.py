@@ -112,6 +112,8 @@ def entry_json(eridi: Eridi, entry: Entry) -> dict[str, Any]:
         out["change"] = entry.change.summary
     if entry.project_id:
         out["project_id"] = entry.project_id
+    if entry.project is not None:
+        out["project"] = {"name": entry.project.name}
     if entry.supersedes:
         out["supersedes"] = entry.supersedes
     if entry.target_id:
@@ -150,9 +152,10 @@ def build_server(eridi: Eridi) -> MCPServer:
 
     @server.tool(annotations=READ_ONLY)
     @friendly
-    def search(query: str, limit: int = 10) -> str:
-        """Search the lab's files and record together. Use quotes for an exact phrase."""
-        hits = eridi.search(query, max(1, min(limit, 50)))
+    def search(query: str, limit: int = 10, project: str | None = None) -> str:
+        """Search the lab's files and record together. Use quotes for an exact phrase.
+        `project` (a name or ID from `list_projects`) limits it to that project."""
+        hits = eridi.search(query, max(1, min(limit, 50)), project)
         return fit({"query": query, "results": [hit_json(h) for h in hits]})
 
     @server.tool(annotations=READ_ONLY)
@@ -186,6 +189,27 @@ def build_server(eridi: Eridi) -> MCPServer:
 
     @server.tool(annotations=READ_ONLY)
     @friendly
+    def list_projects() -> str:
+        """The lab's projects, each with the storage folders whose files belong to it.
+        Other tools take a project's name or ID as `project`."""
+        return fit(
+            {
+                "projects": [
+                    {
+                        "project_id": p.id,
+                        "name": p.name,
+                        "folders": [
+                            {"storage": eridi.root_label(f.root_id), "path": f.path or "(all)"}
+                            for f in p.folders
+                        ],
+                    }
+                    for p in eridi.list_projects()
+                ]
+            }
+        )
+
+    @server.tool(annotations=READ_ONLY)
+    @friendly
     def get_entry(entry_id: str) -> str:
         """One record entry by its ID."""
         return fit(entry_json(eridi, eridi.get_entry(entry_id)))
@@ -193,8 +217,8 @@ def build_server(eridi: Eridi) -> MCPServer:
     @server.tool(annotations=READ_ONLY)
     @friendly
     def list_recent(project: str | None = None, kind: str | None = None, limit: int = 20) -> str:
-        """The newest current record entries. `kind` is note, decision, outcome, link or
-        project."""
+        """The newest current record entries, optionally for one project (name or ID).
+        `kind` is note, decision, outcome, link or project."""
         entries = eridi.recent(max(1, min(limit, 100)), kind=kind, project=project)
         return fit({"entries": [entry_json(eridi, e) for e in entries]})
 
@@ -228,7 +252,8 @@ def build_server(eridi: Eridi) -> MCPServer:
     @server.tool(annotations=READ_ONLY)
     @friendly
     def pending_changes(project: str | None = None) -> str:
-        """Files whose text changed and that nobody has explained yet."""
+        """Files whose text changed and that nobody has explained yet, optionally for one
+        project (name or ID)."""
         changes = eridi.pending_changes(project)
         return fit(
             {

@@ -1,5 +1,6 @@
 """M8.2: `eridi project …` commands."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -59,3 +60,31 @@ def test_project_errors(lab: SampleLab) -> None:
     )
     assert "No single storage" in fails("project", "home", "western", "Dropbox")
     assert "Usage" in ok("project", "new", "--help")
+
+
+def test_scoped_search_notes_changes_and_recent(lab: SampleLab, tmp_path: Path) -> None:
+    """M8.3: notes and searches scoped to a project; notes about a file join its project."""
+    ok("project", "new", "Western blots", "--folder", str(lab.root / "Protocols"))
+    ok("project", "new", "Imaging", "--folder", str(tmp_path / "Shared" / "Imaging"))
+
+    assert "in Imaging" in ok("note", "Order more mounting medium.", "--project", "imaging")
+    out = ok("note", "Checked the dilution table.", "--file", PROTOCOL)
+    assert "in Western blots" in out
+    assert re.fullmatch(r"Saved note [0-9A-Z]{26}\.", ok("note", "Lab retreat in May.").strip())
+
+    scoped = ok("search", "antibody", "--project", "western")
+    assert PROTOCOL in scoped
+    assert "Antibody_lot_log" not in scoped
+    assert "Antibody_lot_log" in ok("search", "antibody")
+    assert "mounting medium" not in ok("search", "mounting", "--project", "western")
+    assert "mounting medium" in ok("search", "mounting", "--project", "imaging")
+
+    recent = ok("recent", "--project", "western")
+    assert "Checked the dilution table." in recent
+    assert "mounting medium" not in recent and "retreat" not in recent
+
+    edit_protocol(lab, "Primary antibody incubation: 2 h at RT.")
+    ok("scan")
+    assert PROTOCOL in ok("changes", "--project", "western")
+    assert "Nothing waiting" in ok("changes", "--project", "imaging")
+    assert "No project matches" in fails("search", "x", "--project", "nothing")

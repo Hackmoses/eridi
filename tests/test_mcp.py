@@ -24,6 +24,7 @@ READ_TOOLS = {
     "file_history",
     "get_entry",
     "list_recent",
+    "list_projects",
     "recent_activity",
     "pending_changes",
     "show_diff",
@@ -201,3 +202,28 @@ def test_eridi_mcp_over_stdio(lab: Eridi, isolated_home: Path) -> None:
 
     data = asyncio.run(go())
     assert data["results"][0]["entry_id"] == note.id
+
+
+def test_projects_for_assistants(lab: Eridi, sample_lab: SampleLab) -> None:
+    """M8.3: assistants can list projects and scope search, changes and recent to one."""
+    p = lab.create_project("Western blots", folders=[str(sample_lab.root / "Protocols")])
+    note = lab.add_note("Dilution checked.", file=PROTOCOL)
+    lab.add_note("Lab retreat in May.")
+    error, data = call(lab, "list_projects")
+    assert not error
+    assert data["projects"] == [
+        {
+            "project_id": p.id,
+            "name": "Western blots",
+            "folders": [{"storage": "Lab Drive", "path": "Protocols"}],
+        }
+    ]
+    error, data = call(lab, "search", query="antibody", project="western")
+    assert not error
+    assert {r.get("path") for r in data["results"]} <= {PROTOCOL, None}
+    error, data = call(lab, "list_recent", project="Western blots", kind="note")
+    assert [e["id"] for e in data["entries"]] == [note.id]
+    error, data = call(lab, "pending_changes", project=p.id)
+    assert [c["path"] for c in data["changes"]] == []  # the note above explained it
+    error, text = call(lab, "search", query="x", project="nothing")
+    assert error and "No project matches" in text

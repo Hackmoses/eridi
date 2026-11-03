@@ -204,6 +204,13 @@ def describe_entry(eridi: Eridi, entry: Entry) -> str:
     return " · ".join(parts)
 
 
+def in_project(eridi: Eridi, entry: Entry) -> str:
+    if entry.project_id is None:
+        return ""
+    names = {p.id: p.name for p in eridi.list_projects()}
+    return f" in {escape(names.get(entry.project_id, entry.project_id))}"
+
+
 def print_diff(diff: FileDiff) -> None:
     out = console()
     if not diff.available:
@@ -496,10 +503,11 @@ def scan() -> None:
 def search_command(
     query: Annotated[str, typer.Argument(help='Words to find. Use "quotes" for a phrase.')],
     limit: Annotated[int, typer.Option(min=1, max=200)] = 20,
+    project: Annotated[str | None, typer.Option(help="Only this project (name or ID).")] = None,
 ) -> None:
     """Search files and the record."""
     with session() as eridi:
-        hits = eridi.search(query, limit)
+        hits = eridi.search(query, limit, project)
         out = console()
         if not hits:
             out.print(f"Nothing found for {escape(query)!r}.")
@@ -528,10 +536,12 @@ def search_command(
 
 
 @app.command()
-def changes() -> None:
+def changes(
+    project: Annotated[str | None, typer.Option(help="Only this project (name or ID).")] = None,
+) -> None:
     """List changed files that still need a why."""
     with session() as eridi:
-        pending = eridi.pending_changes()
+        pending = eridi.pending_changes(project)
         out = console()
         if not pending:
             out.print("Nothing waiting for a why.")
@@ -595,7 +605,9 @@ def why(
                 check_outcome(outcome)
         entry = eridi.add_note(text, file=ref, outcome=outcome, tags=tag or ())
         explained = " (explains the latest change)" if entry.change else ""
-        console().print(f"Saved note {entry.id} about {escape(info.path)}{explained}.")
+        console().print(
+            f"Saved note {entry.id} about {escape(info.path)}{explained}{in_project(eridi, entry)}."
+        )
 
 
 @app.command()
@@ -605,6 +617,10 @@ def note(
     tag: Annotated[list[str] | None, typer.Option(help="A tag; repeat for more.")] = None,
     outcome: Annotated[str | None, typer.Option(help=OUTCOME_HELP)] = None,
     decision: Annotated[bool, typer.Option(help="Record it as a decision.")] = False,
+    project: Annotated[
+        str | None,
+        typer.Option(help="The project it belongs to. A note about a file joins its project."),
+    ] = None,
 ) -> None:
     """Add a note to the record, optionally about a file."""
     check_outcome(outcome)
@@ -612,9 +628,9 @@ def note(
         ref = file_id(pick_file(eridi, file)) if file else None
         entry = eridi.add_note(
             text, file=ref, tags=tag or (), outcome=outcome,
-            kind="decision" if decision else "note",
+            kind="decision" if decision else "note", project=project,
         )  # fmt: skip
-        console().print(f"Saved {entry.kind} {entry.id}.")
+        console().print(f"Saved {entry.kind} {entry.id}{in_project(eridi, entry)}.")
 
 
 @app.command()
@@ -766,10 +782,11 @@ def watch() -> None:
 @app.command()
 def recent(
     limit: Annotated[int, typer.Option(min=1, max=500)] = 20,
+    project: Annotated[str | None, typer.Option(help="Only this project (name or ID).")] = None,
 ) -> None:
     """Show the latest entries in the record."""
     with session() as eridi:
-        entries = eridi.recent(limit)
+        entries = eridi.recent(limit, project=project)
         out = console()
         if not entries:
             out.print('The record is empty. Add a note with: eridi note "<text>"')
