@@ -500,6 +500,8 @@ async function renderProject(params) {
       el("label", { for: "project-note-outcome", class: "visually-hidden" }, "Outcome"), outcome,
       el("button", { type: "submit" }, "Save")));
 
+  const saving = savePanel(p, fail);
+
   const changes = p.changes.length ? el("section", { "aria-labelledby": "changes-h" },
     el("h2", { id: "changes-h" }, "Needs a why"),
     p.changes.map((c, i) => changeCard(c, "p" + i))) : null;
@@ -516,8 +518,78 @@ async function renderProject(params) {
       e.kind === "project" ? el("p", { class: "muted" }, `Project "${e.project_name}" · ${e.author} · ${when(e.created_at)}`)
         : entryCard(e, null)))));
 
-  main.append(...[heading, renameForm, message, search, results, changes, folders, files, noteForm, timeline]
+  main.append(...[heading, renameForm, message, search, results, changes, saving, folders, files, noteForm, timeline]
     .filter(Boolean));
+}
+
+// --- saving files into a project (outbox) ---
+
+const SAVE_STATES = {
+  saved: "Saved on this computer", queued: "Waiting to upload", uploading: "Uploading",
+  uploaded: "Uploaded", needs_confirmation: "Name taken", blocked: "Not allowed",
+};
+
+function saveItem(job, refresh) {
+  const act = (label, path, body) => el("button", { type: "button", class: "secondary", onclick: async () => {
+    try { await api("/outbox/" + encodeURIComponent(job.id) + path, { method: "POST", body }); refresh(); }
+    catch (error) { alert(error.message); }
+  } }, label);
+  const actions = [];
+  if (job.state === "needs_confirmation") {
+    actions.push(act("Replace", "/retry", { on_exists: "replace" }), act("Save as new name", "/retry", { on_exists: "rename" }));
+  } else if (job.state === "queued" || job.state === "blocked") {
+    actions.push(act("Try again", "/retry", {}));
+  }
+  if (job.state !== "uploaded") actions.push(act("Cancel", "/cancel"));
+  return el("li", { class: "save " + job.state },
+    el("span", { class: "tag state" }, SAVE_STATES[job.state] || job.state),
+    job.file ? historyLink(job.file, job.path) : el("span", {}, job.path),
+    job.error && job.state !== "uploaded" ? el("div", { class: "meta" }, job.error) : null,
+    actions.length ? el("div", { class: "actions" }, actions) : null);
+}
+
+function savePanel(p, fail) {
+  const list = el("ul", { class: "saves", "aria-live": "polite" });
+  let timer = null;
+  async function refresh() {
+    clearTimeout(timer);
+    if (!list.isConnected && timer !== null) return;
+    try {
+      const data = await api("/outbox");
+      const mine = data.saves.filter((j) => j.project_id === p.id).slice(0, 20);
+      list.replaceChildren(...mine.map((j) => saveItem(j, refresh)));
+      if (mine.some((j) => ["saved", "queued", "uploading"].includes(j.state))) timer = setTimeout(refresh, 3000);
+      else timer = 0;
+    } catch (error) { showError(list, error); }
+  }
+  const input = el("input", { type: "file", id: "save-file", multiple: true, "aria-label": "Files to save" });
+  const form = el("form", { class: "inline-form", onsubmit: async (e) => {
+    e.preventDefault();
+    for (const file of input.files) {
+      const query = "?name=" + encodeURIComponent(file.name) + "&project=" + encodeURIComponent(p.id);
+      const response = await fetch("/api/save" + query, { method: "POST", credentials: "same-origin",
+        headers: { "Content-Type": "application/octet-stream" }, body: file });
+      if (!response.ok) { const data = await response.json().catch(() => ({})); fail(new Error(data.error || response.statusText)); }
+    }
+    input.value = "";
+    refresh();
+  } }, input, el("button", { type: "submit" }, "Save to " + (p.home_storage || "storage")));
+  refresh();
+  return el("section", { "aria-labelledby": "saves-h" }, el("h2", { id: "saves-h" }, "Save a file"),
+    p.home_storage_id ? form : homePicker(p, fail), list);
+}
+
+function homePicker(p, fail) {
+  const select = el("select", { id: "home-storage", "aria-label": "Home storage" },
+    el("option", { value: "" }, "Choose where this project saves…"));
+  api("/storage").then((data) => select.append(...data.storage.map((r) =>
+    el("option", { value: r.id }, r.label + (r.save ? "" : " (Save off)"))))).catch(fail);
+  select.addEventListener("change", async () => {
+    if (!select.value) return;
+    try { await api("/projects/" + encodeURIComponent(p.id), { method: "PATCH", body: { home_storage_id: select.value } }); route(); }
+    catch (error) { fail(error); }
+  });
+  return select;
 }
 
 // --- status and scanning ---

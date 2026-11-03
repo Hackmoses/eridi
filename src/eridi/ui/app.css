@@ -241,3 +241,11 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
   main { padding: .9rem; }
   .searchbox button { padding: .4rem .7rem; }
 }
+
+/* saved files (outbox) */
+.saves { list-style: none; padding: 0; margin: .5rem 0 0; }
+.saves li { padding: .35rem 0; border-bottom: 1px solid var(--line); }
+.saves .state { margin-right: .5rem; }
+.saves .uploaded .state { color: var(--add-fg); }
+.saves .needs_confirmation .state, .saves .blocked .state { color: var(--del-fg); }
+.saves .actions { margin-top: .25rem; display: flex; gap: .5rem; flex-wrap: wrap; }

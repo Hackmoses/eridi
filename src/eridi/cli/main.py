@@ -27,6 +27,7 @@ from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit, group_label, parse_query
 from eridi.core.models import OUTCOMES, Entry, FileInfo, Project, parse_timestamp
+from eridi.core.outbox import OutboxJob
 from eridi.core.record.store import RecordFolderError
 from eridi.core.scan import ScanProgress, ScanReport
 from eridi.core.service import (
@@ -57,7 +58,13 @@ mcp_app = typer.Typer(
 app.add_typer(storage_app, name="storage")
 app.add_typer(index_app, name="index")
 app.add_typer(project_app, name="project")
+outbox_app = typer.Typer(
+    help="Files saved through Eridi: waiting to upload, needing a decision, or uploaded. "
+    "With no subcommand, lists them and uploads any that are due.",
+    invoke_without_command=True,
+)
 app.add_typer(mcp_app, name="mcp")
+app.add_typer(outbox_app, name="outbox")
 
 OUTCOME_HELP = f"Did it work? One of: {', '.join(OUTCOMES)}."
 
@@ -435,6 +442,25 @@ def storage_mark(
             out.print(f"{escape(root.label)} now uses the shared ID {root.id}. Next: eridi scan")
         else:
             out.print(f"{escape(root.label)} is marked ({root.id}).")
+
+
+@storage_app.command("set")
+def storage_set(
+    storage: Annotated[str, typer.Argument(help="The storage's name or ID.")],
+    label: Annotated[str | None, typer.Option(help="A new name for it.")] = None,
+    search: Annotated[
+        bool | None, typer.Option("--search/--no-search", help="Include it in scans and search.")
+    ] = None,
+    save: Annotated[
+        bool | None,
+        typer.Option("--save/--no-save", help="Allow saving files here through Eridi."),
+    ] = None,
+) -> None:
+    """Change a storage's name, or turn Search or Save on or off."""
+    with session() as eridi:
+        root = eridi.update_root(storage_id(eridi, storage), label=label, search=search, save=save)
+        state = f"search {'on' if root.search else 'off'} · save {'on' if root.save else 'off'}"
+        console().print(f"[bold]{escape(root.label)}[/bold]  [dim]{state}[/dim]")
 
 
 @storage_app.command("remove")
@@ -942,6 +968,116 @@ def index_rebuild() -> None:
             console().print(
                 f"[yellow]{escape(eridi.root_label(root_id) or root_id)}[/yellow]: {escape(reason)}"
             )
+
+
+SAVE_STATES = {
+    "saved": "saved on this computer",
+    "queued": "waiting to upload",
+    "uploading": "uploading",
+    "uploaded": "uploaded",
+    "needs_confirmation": "name taken: replace or save as new name",
+    "blocked": "not allowed",
+}
+
+
+def print_save(eridi: Eridi, job: OutboxJob) -> None:
+    out = console()
+    where = eridi.root_label(job.root_id) or job.root_id
+    path = job.uploaded_path or job.path
+    color = {"uploaded": "green", "needs_confirmation": "yellow", "blocked": "red"}.get(
+        job.state, "cyan"
+    )
+    out.print(
+        f"[{color}]{SAVE_STATES.get(job.state, job.state)}[/{color}]  "
+        f"{escape(where)} / {escape(path)}  [dim]{job.id}[/dim]"
+    )
+    if job.last_error and not job.done:
+        out.print(f"  [dim]{escape(job.last_error)}[/dim]")
+    if job.state == "needs_confirmation":
+        out.print(f"  [dim]eridi outbox retry {job.id} --replace | --new-name[/dim]")
+
+
+def on_exists_choice(replace_: bool, new_name: bool) -> str | None:
+    if replace_ and new_name:
+        raise EridiError("Choose --replace or --new-name, not both.")
+    return "replace" if replace_ else "rename" if new_name else None
+
+
+@app.command()
+def save(
+    file: Annotated[Path, typer.Argument(help="The file on this computer to save.")],
+    project: Annotated[
+        str | None, typer.Option(help="Save into this project's home storage.")
+    ] = None,
+    storage: Annotated[str | None, typer.Option(help="Save into this storage instead.")] = None,
+    folder: Annotated[
+        str | None,
+        typer.Option(help="Folder inside the storage (default: the project's folder there)."),
+    ] = None,
+    name: Annotated[
+        str | None, typer.Option("--as", help="Save under this name (default: the same).")
+    ] = None,
+    replace_: Annotated[
+        bool, typer.Option("--replace", help="If the name is taken, save as a new version.")
+    ] = False,
+    new_name: Annotated[
+        bool, typer.Option("--new-name", help='If the name is taken, add " (2)" to it.')
+    ] = False,
+) -> None:
+    """Save a copy of a file into a project's storage. Kept here until the upload works."""
+    with session() as eridi:
+        try:
+            data = file.expanduser().read_bytes()
+        except OSError as exc:
+            raise EridiError(f"Could not read {file}: {exc.strerror or exc}") from None
+        root_ref = storage_id(eridi, storage) if storage is not None else None
+        job = eridi.save_file(
+            data, name or file.name, project=project, storage=root_ref, folder=folder,
+            on_exists=on_exists_choice(replace_, new_name) or "ask",
+        )  # fmt: skip
+        print_save(eridi, job)
+        if job.waiting:
+            console().print("[dim]It's safe on this computer; Eridi keeps trying while the "
+                            "app is open, or run `eridi outbox`.[/dim]")  # fmt: skip
+
+
+@outbox_app.callback()
+def outbox_main(ctx: typer.Context) -> None:
+    """List saved files, and upload any that are due."""
+    if ctx.invoked_subcommand is not None:
+        return
+    with session() as eridi:
+        eridi.process_outbox()
+        jobs = eridi.outbox_jobs()
+        if not jobs:
+            console().print("Nothing saved through Eridi yet. Save a file with: eridi save")
+        for job in reversed(jobs):
+            print_save(eridi, job)
+
+
+@outbox_app.command("retry")
+def outbox_retry(
+    job_id: Annotated[str, typer.Argument(help="The saved file's ID (from `eridi outbox`).")],
+    replace_: Annotated[
+        bool, typer.Option("--replace", help="Replace the existing file (as a new version).")
+    ] = False,
+    new_name: Annotated[
+        bool, typer.Option("--new-name", help='Save as "name (2).ext" instead.')
+    ] = False,
+) -> None:
+    """Try an upload again now, or answer "the name is taken"."""
+    with session() as eridi:
+        print_save(eridi, eridi.retry_save(job_id, on_exists_choice(replace_, new_name)))
+
+
+@outbox_app.command("cancel")
+def outbox_cancel(
+    job_id: Annotated[str, typer.Argument(help="The saved file's ID (from `eridi outbox`).")],
+) -> None:
+    """Stop uploading a file and delete Eridi's copy. Your original is not touched."""
+    with session() as eridi:
+        job = eridi.cancel_save(job_id)
+        console().print(f"Cancelled {escape(job.path)}.")
 
 
 def eridi_command() -> list[str]:

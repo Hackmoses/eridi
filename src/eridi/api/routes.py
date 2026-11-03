@@ -13,6 +13,7 @@ from eridi.core.changes import Activity, FileDiff, PendingChange
 from eridi.core.config import ConfigError
 from eridi.core.index.search import SearchHit, group_label
 from eridi.core.models import Entry, FileInfo, Project, Root
+from eridi.core.outbox import OutboxJob
 from eridi.core.record.store import RecordFolderError
 from eridi.core.service import (
     AmbiguousFileError,
@@ -172,6 +173,24 @@ def project_json(eridi: Eridi, p: Project) -> dict[str, Any]:
     }
 
 
+def save_json(eridi: Eridi, j: OutboxJob) -> dict[str, Any]:
+    return {
+        "id": j.id,
+        "state": j.state,
+        "storage_id": j.root_id,
+        "storage": eridi.root_label(j.root_id),
+        "project_id": j.project_id,
+        "path": j.uploaded_path or j.path,
+        "name": (j.uploaded_path or j.path).rsplit("/", 1)[-1],
+        "size": j.size,
+        "created_at": j.created_at,
+        "uploaded_at": j.uploaded_at,
+        "attempts": j.attempts,
+        "error": j.last_error,
+        "file": f"{j.root_id}:{j.uploaded_path}" if j.uploaded_path else None,
+    }
+
+
 # --- request bodies ---
 
 
@@ -217,6 +236,10 @@ class MicrosoftSignInIn(BaseModel):
 class MicrosoftDriveIn(BaseModel):
     drive_id: str = Field(min_length=1, max_length=500)
     label: str | None = Field(default=None, max_length=200)
+
+
+class RetryIn(BaseModel):
+    on_exists: str | None = Field(default=None, pattern="^(ask|replace|rename)$")
 
 
 class StorageIn(BaseModel):
@@ -506,6 +529,65 @@ def add_microsoft_storage(request: Request, body: MicrosoftDriveIn) -> Any:
         return error(exc)
     _scanner(request).request()  # read it right away
     return JSONResponse(root_json(root, None), status_code=201)
+
+
+MAX_SAVE_BYTES = 500 * 1024 * 1024
+
+
+@router.post("/save")
+async def save(
+    request: Request,
+    name: Annotated[str, Query(min_length=1, max_length=500)],
+    project: str | None = None,
+    storage: str | None = None,
+    folder: str | None = None,
+    on_exists: Annotated[str, Query(pattern="^(ask|replace|rename)$")] = "ask",
+) -> Any:
+    """Save the request body as a file. It is kept on this computer, then uploaded."""
+    length = request.headers.get("content-length", "")
+    if length.isdigit() and int(length) > MAX_SAVE_BYTES:
+        return JSONResponse({"error": "That file is too large to save (500 MB at most)."},
+                            status_code=413)  # fmt: skip
+    data = await request.body()
+    if len(data) > MAX_SAVE_BYTES:
+        return JSONResponse({"error": "That file is too large to save (500 MB at most)."},
+                            status_code=413)  # fmt: skip
+    eridi = _eridi(request)
+    try:
+        job = eridi.save_file(
+            data, name, project=project, storage=storage, folder=folder,
+            on_exists=on_exists, upload=False,
+        )  # fmt: skip
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    _scanner(request).upload_soon()
+    return JSONResponse(save_json(eridi, job), status_code=202)
+
+
+@router.get("/outbox")
+def outbox(request: Request) -> Any:
+    eridi = _eridi(request)
+    return {"saves": [save_json(eridi, j) for j in reversed(eridi.outbox_jobs())]}
+
+
+@router.post("/outbox/{job_id}/retry")
+def retry_save(request: Request, job_id: str, body: RetryIn) -> Any:
+    eridi = _eridi(request)
+    try:
+        job = eridi.retry_save(job_id, body.on_exists, upload=False)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    _scanner(request).upload_soon()
+    return save_json(eridi, job)
+
+
+@router.post("/outbox/{job_id}/cancel")
+def cancel_save(request: Request, job_id: str) -> Any:
+    eridi = _eridi(request)
+    try:
+        return save_json(eridi, eridi.cancel_save(job_id))
+    except KNOWN_ERRORS as exc:
+        return error(exc)
 
 
 @router.post("/scan")

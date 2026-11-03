@@ -1,6 +1,8 @@
 """Local and synced folders (including OneDrive, Google Drive and Dropbox sync folders).
 
-Read-only: files are only ever opened with mode "rb". Online-only placeholders that a sync
+Read-only while scanning: files are only ever opened with mode "rb". The one exception is
+`save()`, used by the outbox (M11) for files the user saves through Eridi into storage with
+Save turned on; it never replaces a file unless asked to. Online-only placeholders that a sync
 client keeps in the cloud are listed but not read, unless the user turns on
 `read_online_only_files`, so a scan never downloads someone's whole cloud drive.
 """
@@ -17,6 +19,7 @@ import pathspec
 
 from eridi.connectors.base import (
     ConnectorError,
+    NameTakenInStorageError,
     PlaceholderNotReadError,
     RemoteChange,
     RemoteFile,
@@ -211,6 +214,25 @@ class LocalConnector:
                 return handle.read()
         except OSError as exc:
             raise ConnectorError(f"Could not read {path}: {exc.strerror or exc}") from None
+
+    def exists(self, path: str) -> bool:
+        return self._full_path(path).exists()
+
+    def save(self, path: str, data: bytes, *, overwrite: bool = False) -> RemoteFile:
+        """Write `data` atomically: a reader sees the old file or the new one, never half."""
+        from eridi.core.fsutil import atomic_write_bytes
+
+        rel = normalize_relative(path)
+        full = self._full_path(rel)
+        self._resolved_root()  # the storage folder itself must be there
+        try:
+            atomic_write_bytes(full, data, overwrite=overwrite)
+            st = full.stat()
+        except FileExistsError:
+            raise NameTakenInStorageError(f"{rel} already exists in {self.root}.") from None
+        except OSError as exc:
+            raise ConnectorError(f"Could not save {rel}: {exc.strerror or exc}") from None
+        return RemoteFile(path=rel, size=st.st_size, modified=st.st_mtime)
 
     def versions(self, path: str) -> list[RemoteVersion]:
         return []  # plain folders keep no history; Eridi's snapshots fill the gap

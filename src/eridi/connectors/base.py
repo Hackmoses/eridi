@@ -17,6 +17,10 @@ class PlaceholderNotReadError(ConnectorError):
     """The file is online-only, and reading it would download it."""
 
 
+class NameTakenInStorageError(ConnectorError):
+    """`save()` without `overwrite` found a file already at that path."""
+
+
 @dataclass(frozen=True)
 class RemoteFile:
     """A file as a storage source reports it. `path` is POSIX-style, relative to the root."""
@@ -75,5 +79,15 @@ class Connector(Protocol):
         """Changes since `cursor` (all files when None) and the cursor for next time."""
         ...
 
-    # From M11, only for storage the user allowed saving to:
-    # def save(self, path: str, data: bytes) -> RemoteFile: ...
+
+@runtime_checkable
+class SavingConnector(Connector, Protocol):
+    """A source Eridi can save to (M11). The engine only calls `save()` for storage the user
+    turned Save on for, and only with bytes the user chose to save."""
+
+    def exists(self, path: str) -> bool: ...
+
+    def save(self, path: str, data: bytes, *, overwrite: bool = False) -> RemoteFile:
+        """Write a file. Without `overwrite`, an existing file raises
+        `NameTakenInStorageError` and is left untouched."""
+        ...

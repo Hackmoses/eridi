@@ -16,7 +16,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from eridi.connectors import connector_for
-from eridi.connectors.base import Connector, ConnectorError
+from eridi.connectors.base import (
+    Connector,
+    ConnectorError,
+    NameTakenInStorageError,
+    SavingConnector,
+)
 from eridi.connectors.local import read_root_marker, write_root_marker
 from eridi.connectors.msauth import MicrosoftAccount, MicrosoftAuth
 from eridi.connectors.msgraph import (
@@ -68,6 +73,14 @@ from eridi.core.models import (
     Root,
     Subject,
     utc_now,
+)
+from eridi.core.outbox import (
+    ON_EXISTS,
+    NameTakenError,
+    Outbox,
+    OutboxJob,
+    SaveRefusedError,
+    free_name,
 )
 from eridi.core.paths import PathOutsideRootError, app_home, normalize_relative, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
@@ -207,6 +220,8 @@ class Eridi:
         self._microsoft: MicrosoftAuth | None = None
         self.graph_client_factory: Callable[[Callable[[], str]], GraphClient] = GraphClient
         self._last_refresh = 0.0
+        self.outbox = Outbox()
+        self._outbox_lock = threading.Lock()
         self.last_activity: str | None = None
         """When a watcher last recorded a change (UIs refresh when this moves)."""
 
@@ -612,6 +627,173 @@ class Eridi:
             with self.conn:
                 upsert_root(self.conn, root)
             return root
+
+    # --- saving through the outbox (M11) ---
+
+    def save_target(
+        self, *, project: str | None = None, storage: str | None = None, folder: str | None = None
+    ) -> tuple[Root, str, Project | None]:
+        """Where a file saved for this project (or into this storage) goes: the storage and
+        the folder inside it. A project saves to its home storage, into the project's
+        folder there if it has one."""
+        proj = self._get_project(project) if project is not None else None
+        if storage is None:
+            if proj is None:
+                raise EridiError("Say where to save: a project, or a storage.")
+            if proj.home_root_id is None:
+                raise EridiError(
+                    f"{proj.name!r} has no home storage to save to. Choose one with "
+                    f"`eridi project home {proj.name!r} <storage>`."
+                )
+            storage = proj.home_root_id
+        root = self.get_root(storage)
+        if folder is None:
+            own = [f.path for f in proj.folders if f.root_id == root.id] if proj else []
+            folder = min(own, key=len) if own else ""
+        folder = folder.strip().strip("/\\")
+        if folder:
+            try:
+                folder = normalize_relative(folder)
+            except ValueError as exc:
+                raise EridiError(f"Can't save into that folder: {exc}") from None
+        self._check_can_save(root, proj)
+        return root, folder, proj
+
+    def _check_can_save(self, root: Root, project: Project | None) -> None:
+        if not root.save:
+            raise SaveRefusedError(
+                f"Saving to {root.label!r} is off. Turn it on with "
+                f"`eridi storage set {root.label!r} --save` (or on the Storage page)."
+            )
+
+    def save_file(
+        self,
+        data: bytes,
+        name: str,
+        *,
+        project: str | None = None,
+        storage: str | None = None,
+        folder: str | None = None,
+        on_exists: str = "ask",
+        upload: bool = True,
+    ) -> OutboxJob:
+        """Save a file into a project's home storage (or a given storage) through the outbox.
+
+        The bytes are kept on this computer first, then uploaded; if that fails they stay
+        queued and are retried. Nothing is ever replaced unless `on_exists` says so."""
+        self._require_init()
+        if on_exists not in ON_EXISTS:
+            raise EridiError(f"on_exists must be one of: {', '.join(ON_EXISTS)}.")
+        clean = name.strip().replace("\\", "/").rsplit("/", 1)[-1]
+        if not clean or clean in (".", ".."):
+            raise EridiError("The file needs a name.")
+        with self._lock:
+            self._refresh_records()
+            try:
+                root, folder, proj = self.save_target(
+                    project=project, storage=storage, folder=folder
+                )
+            except SaveRefusedError as exc:
+                raise EridiError(str(exc)) from None
+            path = normalize_relative(f"{folder}/{clean}" if folder else clean)
+            job = self.outbox.add(
+                root.id, path, data, on_exists=on_exists, project_id=proj.id if proj else None
+            )
+        if upload:
+            job = self._run_job(job)
+        return job
+
+    def outbox_jobs(self) -> list[OutboxJob]:
+        """Files saved through Eridi, oldest first: waiting, needing a decision, or done."""
+        return self.outbox.jobs()
+
+    def get_save(self, job_id: str) -> OutboxJob:
+        job = self.outbox.get(job_id.strip().upper())
+        if job is None:
+            raise EridiError(f"No saved file has ID {job_id!r}. See `eridi outbox`.")
+        return job
+
+    def retry_save(
+        self, job_id: str, on_exists: str | None = None, *, upload: bool = True
+    ) -> OutboxJob:
+        """Try again now; `on_exists` answers "the name is taken" (replace or rename)."""
+        job = self.get_save(job_id)
+        if job.done:
+            return job
+        if on_exists is not None and on_exists not in ON_EXISTS:
+            raise EridiError(f"on_exists must be one of: {', '.join(ON_EXISTS)}.")
+        retried = self.outbox.retry(job.id, on_exists)
+        if retried is None:  # cancelled meanwhile
+            raise EridiError(f"No saved file has ID {job_id!r}. See `eridi outbox`.")
+        return self._run_job(retried) if upload else retried
+
+    def cancel_save(self, job_id: str) -> OutboxJob:
+        """Stop uploading a file and delete Eridi's local copy of it (never the storage's)."""
+        job = self.get_save(job_id)
+        if job.done:
+            raise EridiError("That file is already uploaded; there is nothing to cancel.")
+        self.outbox.cancel(job.id)
+        return job
+
+    def process_outbox(self) -> list[OutboxJob]:
+        """Upload every saved file that is due (the app calls this in the background)."""
+        if not self._outbox_lock.acquire(blocking=False):
+            return []
+        try:
+            done = self.outbox.process(self._upload)
+        finally:
+            self._outbox_lock.release()
+        self._after_upload(done)
+        return done
+
+    def _run_job(self, job: OutboxJob) -> OutboxJob:
+        with self._outbox_lock:
+            result = self.outbox.run(job, self._upload)
+        self._after_upload([result])
+        return result
+
+    def _after_upload(self, jobs: list[OutboxJob]) -> None:
+        """Index uploaded files at once, so they're searchable and in their project."""
+        by_root: dict[str, list[str]] = {}
+        for job in jobs:
+            if job.done and job.uploaded_path:
+                by_root.setdefault(job.root_id, []).append(job.uploaded_path)
+        for root_id, paths in by_root.items():
+            try:
+                self.scan_changed(root_id, paths)
+            except (ConnectorError, EridiError) as exc:
+                log.info("Saved files will be indexed at the next scan: %s", exc)
+
+    def _upload(self, job: OutboxJob, data: bytes) -> str:
+        with self._lock:
+            self._reload_if_changed()
+            root = self._config.root(job.root_id)
+            if root is None:
+                raise SaveRefusedError(
+                    "That storage is no longer connected. Save the file somewhere else."
+                )
+            project = None
+            if job.project_id is not None:
+                self._refresh_records()
+                project = next(
+                    (p for p in list_projects(self.conn) if p.id == job.project_id), None
+                )
+            self._check_can_save(root, project)
+            connector = self.connector(root)
+        if not isinstance(connector, SavingConnector):
+            raise SaveRefusedError(f"Eridi can't save to {root.label!r} ({root.kind}) yet.")
+        path = job.path
+        if job.on_exists == "rename" and connector.exists(path):
+            if _same_bytes(connector, path, job):
+                return path  # a crash after the upload, before it was recorded
+            path = free_name(path, connector.exists)
+        try:
+            connector.save(path, data, overwrite=job.on_exists == "replace")
+        except NameTakenInStorageError:
+            if _same_bytes(connector, path, job):
+                return path
+            raise NameTakenError(path) from None
+        return path
 
     # --- projects ---
 
@@ -1364,6 +1546,15 @@ class Eridi:
                 f"{used / 2**20:.1f} MB of {cap / 2**20:.0f} MB used.",
             )  # fmt: skip
         return report
+
+
+def _same_bytes(connector: Connector, path: str, job: OutboxJob) -> bool:
+    import hashlib
+
+    try:
+        return hashlib.sha256(connector.open_bytes(path)).hexdigest() == job.sha256
+    except ConnectorError:
+        return False
 
 
 def _mark_baseline(conn: sqlite3.Connection, root_id: str) -> None:
