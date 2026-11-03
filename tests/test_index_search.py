@@ -185,12 +185,13 @@ def test_project_filter(conn: sqlite3.Connection, tmp_path: Path) -> None:
     upsert_root(conn, ROOT)
     for path in ["ProjA/plan.md", "ProjA_old/plan.md", "Other/plan.md"]:
         upsert_file(conn, FileInfo(ROOT.id, path, 1, 1.0, ".md"), "western plan")
-    with conn:
-        conn.execute("INSERT INTO project_roots VALUES ('proj_A', ?, 'ProjA')", (ROOT.id,))
     store = RecordStore.init(tmp_path / "record")
     store.append(entry(text="western plan agreed", project_id="proj_A"))
     store.append(entry(text="western plan elsewhere"))
     sync_records(conn, store)
+    # project_roots is derived from `project` entries (see test_projects.py); set it directly.
+    with conn:
+        conn.execute("INSERT INTO project_roots VALUES ('proj_A', ?, 'ProjA')", (ROOT.id,))
     hits = search(conn, "western plan", project="proj_A")
     assert sorted((h.kind, h.path or h.title) for h in hits) == [
         ("entry", "western plan agreed"),

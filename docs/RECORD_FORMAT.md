@@ -88,6 +88,12 @@ Kind-specific fields:
 - `outcome` entries set `target_id` (the entry they evaluate) or a `subjects` file version.
 - `link` entries set `links: [{"from": "<id or subject>", "to": "<id or subject>", "relation": "caused|replaces|relates"}]`.
 - `project` entries set `project: {"id": "proj_…", "name": "Antibody validation", "home_root_id": "root_…"}`. The latest `project` entry for an ID defines its current name and home.
+  Optional (added in M8, within `/1`): `project.folders: [{"root_id": "root_…", "path": "Protocols/WB"}]`,
+  the project's complete folder list as of that entry. `path` is POSIX-style, relative to the
+  root; `""` means the whole root. Files in these folders belong to the project, and so do
+  entries about them. A `project` entry without `folders` keeps the folders of the project's
+  previous entry (so entries written before M8 never clear them). Fixture:
+  `tests/fixtures/record/v1/project_folders.json`.
 - `tombstone` entries set `target_id`. Views hide the target; history shows that it was retracted and by whom.
 
 ## Roots

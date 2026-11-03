@@ -15,6 +15,8 @@ import sqlite3
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
+from eridi.core.index.projects import entry_in_project_sql, file_in_project_sql
+
 if TYPE_CHECKING:
     from eridi.core.changes import FileStats
 
@@ -201,11 +203,7 @@ def _file_hits(
     project_filter = ""
     params: list[object] = [expr]
     if project is not None:
-        project_filter = (
-            "AND EXISTS (SELECT 1 FROM project_roots pr WHERE pr.project_id = ? "
-            "AND pr.root_id = f.root_id AND (pr.path_prefix = '' OR f.path = pr.path_prefix "
-            "OR substr(f.path, 1, length(pr.path_prefix) + 1) = pr.path_prefix || '/'))"
-        )
+        project_filter = "AND " + file_in_project_sql("f")
         params.append(project)
     params.append(limit)
     # Rank first, then build snippets only for the rows shown: snippet() on every match of a
@@ -259,8 +257,8 @@ def _entry_title(text: str, kind: str) -> str:
 def _entry_hits(
     conn: sqlite3.Connection, expr: str, limit: int, project: str | None, how: Match
 ) -> list[SearchHit]:
-    project_filter = "AND e.project_id = ?" if project is not None else ""
-    params: list[object] = [expr, *([project] if project is not None else []), limit]
+    project_filter = "AND " + entry_in_project_sql("e") if project is not None else ""
+    params: list[object] = [expr, *([project, project] if project is not None else []), limit]
     rows = conn.execute(
         f"""
         WITH top AS (

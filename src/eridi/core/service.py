@@ -38,6 +38,12 @@ from eridi.core.index.files import (
     text_versions,
     upsert_root,
 )
+from eridi.core.index.projects import (
+    entry_in_project_sql,
+    file_in_project_sql,
+    list_projects,
+    projects_for_file,
+)
 from eridi.core.index.rebuild import RebuildReport, rebuild
 from eridi.core.index.records import RecordSyncReport, sync_records
 from eridi.core.index.search import SearchHit, search
@@ -47,11 +53,14 @@ from eridi.core.models import (
     Entry,
     EntryChange,
     FileInfo,
+    Project,
+    ProjectFolder,
+    ProjectRef,
     Root,
     Subject,
     utc_now,
 )
-from eridi.core.paths import PathOutsideRootError, app_home, to_posix_relative
+from eridi.core.paths import PathOutsideRootError, app_home, normalize_relative, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
 from eridi.core.record.store import RecordFolderError, RecordStore
 from eridi.core.record.views import HistoryItem, history
@@ -90,6 +99,11 @@ class AmbiguousFileError(EridiError):
         super().__init__(
             f"{ref!r} matches {len(candidates)} files: {names}{more}. Use more of the path."
         )
+
+
+class UnknownProjectError(EridiError):
+    def __init__(self, ref: str) -> None:
+        super().__init__(f"No project matches {ref!r}. See `eridi project list`.")
 
 
 class UnknownEntryError(EridiError):
@@ -131,6 +145,16 @@ class FileHistory:
     entries: list[HistoryItem]
     moves: list[tuple[str, str, str]]
     """(from_path, to_path, moved_at)."""
+
+
+@dataclass(frozen=True)
+class ProjectOverview:
+    project: Project
+    files: list[FileInfo]
+    """Present files in the project's folders, from every storage."""
+    pending: list[PendingChange]
+    entries: list[Entry]
+    """The project's record timeline, newest first."""
 
 
 @dataclass(frozen=True)
@@ -364,6 +388,177 @@ class Eridi:
     def connector(self, root: Root) -> Connector:
         return connector_for(root, self._config.settings, ignore=self._own_folders_ignored(root))
 
+    # --- projects ---
+
+    def list_projects(self) -> list[Project]:
+        with self._lock:
+            self._refresh_records()
+            return list_projects(self.conn)
+
+    def get_project(self, ref: str) -> Project:
+        """Find a project by ID or name (exact, then the start or any part of the name)."""
+        with self._lock:
+            self._refresh_records()
+            return self._get_project(ref)
+
+    def _get_project(self, ref: str) -> Project:
+        ref = ref.strip()
+        projects = list_projects(self.conn)
+        for p in projects:
+            if p.id == ref:
+                return p
+        needle = ref.casefold()
+        for match in (
+            lambda p: p.name.casefold() == needle,
+            lambda p: p.name.casefold().startswith(needle),
+            lambda p: needle in p.name.casefold(),
+        ):
+            hits = [p for p in projects if match(p)]
+            if len(hits) == 1:
+                return hits[0]
+            if len(hits) > 1:
+                names = ", ".join(repr(p.name) for p in hits[:5])
+                raise EridiError(f"{ref!r} matches several projects: {names}. Use the full name.")
+        raise UnknownProjectError(ref)
+
+    def _project_id(self, ref: str | None) -> str | None:
+        return None if ref is None else self._get_project(ref).id
+
+    def _write_project(self, project: Project, text: str = "") -> Project:
+        ref = ProjectRef(project.id, project.name, project.home_root_id, project.folders)
+        entry = make_entry(
+            "project", self._author("human", None), self._config.device_id, text,
+            project=ref, project_id=project.id,
+        )  # fmt: skip
+        self._append(entry)
+        return self._get_project(project.id)
+
+    def _check_name(self, name: str, except_id: str | None = None) -> str:
+        name = " ".join(name.split())
+        if not name:
+            raise EridiError("A project needs a name.")
+        for p in list_projects(self.conn):
+            if p.id != except_id and p.name.casefold() == name.casefold():
+                raise EridiError(f"There is already a project called {p.name!r}.")
+        return name
+
+    def create_project(
+        self, name: str, *, home_root_id: str | None = None, folders: Iterable[str] = ()
+    ) -> Project:
+        """Start a project. `folders` are folder references, as for `add_project_folder`."""
+        self._require_init()
+        with self._lock:
+            self._refresh_records(force=True)
+            name = self._check_name(name)
+            if home_root_id is not None:
+                self.get_root(home_root_id)
+            resolved = tuple(dict.fromkeys(self._resolve_folder(f) for f in folders))
+            project = Project(new_id("proj"), name, home_root_id, resolved)
+            return self._write_project(project)
+
+    def rename_project(self, ref: str, name: str) -> Project:
+        self._require_init()
+        with self._lock:
+            self._refresh_records(force=True)
+            project = self._get_project(ref)
+            name = self._check_name(name, except_id=project.id)
+            return self._write_project(replace(project, name=name))
+
+    def set_project_home(self, ref: str, root_id: str | None) -> Project:
+        """Set the storage that new files for this project are saved to (used from M11)."""
+        self._require_init()
+        with self._lock:
+            self._refresh_records(force=True)
+            project = self._get_project(ref)
+            if root_id is not None:
+                self.get_root(root_id)
+            return self._write_project(replace(project, home_root_id=root_id))
+
+    def _resolve_folder(self, ref: str) -> ProjectFolder:
+        """A folder from a path on disk, `<root_id>:<path>`, or a storage ID or name (all
+        of it)."""
+        ref = ref.strip()
+        if not ref:
+            raise EridiError("Give a folder: a path, or a storage name for all of it.")
+        root_id, sep, rest = ref.partition(":")
+        if sep and self._config.root(root_id) is not None:
+            path = rest.replace("\\", "/").strip("/")
+            return ProjectFolder(root_id, normalize_relative(path) if path else "")
+        for root in self._config.roots:
+            if ref in (root.id, root.label):
+                return ProjectFolder(root.id, "")
+        candidate = Path(ref).expanduser()
+        for root in self._config.roots:
+            if root.kind != "local":
+                continue
+            location = Path(root.location)
+            try:
+                resolved = candidate.resolve()
+                if resolved == location.resolve():
+                    return ProjectFolder(root.id, "")
+                rel = to_posix_relative(location, resolved)
+            except (PathOutsideRootError, OSError, ValueError):
+                continue
+            if not resolved.is_dir():
+                raise EridiError(f"{ref} is a file. Give the folder that holds it.")
+            return ProjectFolder(root.id, rel)
+        raise EridiError(
+            f"{ref!r} isn't inside any connected storage. Connect it first with "
+            "`eridi storage add`, or give `<storage ID>:<folder>`."
+        )
+
+    def add_project_folder(self, ref: str, folder: str) -> Project:
+        """Add a folder to a project. Its files, and notes about them, join the project."""
+        self._require_init()
+        with self._lock:
+            self._refresh_records(force=True)
+            project = self._get_project(ref)
+            new = self._resolve_folder(folder)
+            if new in project.folders:
+                return project
+            return self._write_project(replace(project, folders=(*project.folders, new)))
+
+    def remove_project_folder(self, ref: str, folder: str) -> Project:
+        self._require_init()
+        with self._lock:
+            self._refresh_records(force=True)
+            project = self._get_project(ref)
+            old = self._resolve_folder(folder)
+            if old not in project.folders:
+                raise EridiError(f"That folder isn't part of {project.name!r}.")
+            kept = tuple(f for f in project.folders if f != old)
+            return self._write_project(replace(project, folders=kept))
+
+    def projects_for(self, file: FileInfo) -> list[Project]:
+        """Projects a file belongs to through its folder, most specific first."""
+        with self._lock:
+            return projects_for_file(list_projects(self.conn), file.root_id, file.path)
+
+    def project_files(self, ref: str) -> list[FileInfo]:
+        with self._lock:
+            project = self._get_project(ref)
+            rows = self.conn.execute(
+                "SELECT root_id, path FROM files f WHERE f.status = 'present' AND "  # noqa: S608
+                + file_in_project_sql("f")
+                + " ORDER BY f.modified DESC, f.path",
+                (project.id,),
+            ).fetchall()
+            found = (get_file(self.conn, r[0], r[1]) for r in rows)
+            return [f for f in found if f is not None]
+
+    def project_overview(self, ref: str, limit: int = 50) -> ProjectOverview:
+        """Everything on a project page: files from all storage, changes waiting for a why,
+        and the record timeline."""
+        with self._lock:
+            self._refresh_records()
+            project = self._get_project(ref)
+            return ProjectOverview(
+                project,
+                self.project_files(project.id),
+                self.pending_changes(project.id),
+                self.recent(limit, project=project.id),
+            )
+
     # --- scanning and the index ---
 
     def _refresh_records(self, *, force: bool = False) -> RecordSyncReport | None:
@@ -517,7 +712,7 @@ class Eridi:
         """Search files and notes. File hits carry their history (`SearchHit.stats`)."""
         with self._lock:
             self._refresh_records()
-            hits = search(self.conn, query, limit, project)
+            hits = search(self.conn, query, limit, self._project_id(project))
             dismissed = self._config.dismissed_changes
             return [
                 replace(h, stats=file_stats(self.conn, h.root_id, h.path, dismissed))
@@ -589,7 +784,7 @@ class Eridi:
         with self._lock:
             self._refresh_records()
             return changes_module.pending_changes(
-                self.conn, self.snapshots, self._config.dismissed_changes, project
+                self.conn, self.snapshots, self._config.dismissed_changes, self._project_id(project)
             )
 
     def pending_change_for(self, file: FileInfo) -> PendingChange | None:
@@ -660,9 +855,13 @@ class Eridi:
         with self._lock:
             subjects: list[Subject] = []
             change: EntryChange | None = None
+            project_id = self._project_id(project)
             if file is not None:
                 info = self._resolve_file(file)
                 subjects.append(self._subject(info))
+                if project_id is None:  # a note about a file joins the file's project
+                    found = projects_for_file(list_projects(self.conn), info.root_id, info.path)
+                    project_id = found[0].id if found else None
                 pending = next(
                     (
                         c
@@ -686,7 +885,7 @@ class Eridi:
                 change=change,
                 outcome=outcome,
                 tags=list(tags),
-                project_id=project,
+                project_id=project_id,
                 supersedes=supersedes,
             )
             return self._append(entry)
@@ -790,8 +989,9 @@ class Eridi:
                 sql += " AND kind = ?"
                 params.append(kind)
             if project is not None:
-                sql += " AND project_id = ?"
-                params.append(project)
+                pid = self._get_project(project).id
+                sql += " AND " + entry_in_project_sql("entries")
+                params += [pid, pid]
             sql += " ORDER BY id DESC LIMIT ?"
             params.append(limit)
             return [parse_entry(json.loads(r[0])) for r in self.conn.execute(sql, params)]

@@ -67,12 +67,31 @@ class Link:
 
 
 @dataclass(frozen=True)
+class ProjectFolder:
+    """A folder that belongs to a project: a root, and a path prefix inside it ("" = all)."""
+
+    root_id: str
+    path: str = ""
+    extra_unknown: JSON = field(default_factory=dict, hash=False)
+
+    def contains(self, root_id: str, path: str) -> bool:
+        if root_id != self.root_id:
+            return False
+        return not self.path or path == self.path or path.startswith(self.path + "/")
+
+
+@dataclass(frozen=True)
 class ProjectRef:
-    """The project a `project` entry creates or renames."""
+    """The project a `project` entry creates or renames.
+
+    `folders` is the project's complete folder list as of this entry; `None` means the entry
+    doesn't say (it keeps the folders from the project's previous entry).
+    """
 
     id: str
     name: str
     home_root_id: str | None = None
+    folders: tuple[ProjectFolder, ...] | None = None
     extra_unknown: JSON = field(default_factory=dict)
 
 
@@ -158,3 +177,13 @@ class FileInfo:
     extract_status: str | None = None
     last_seen: str | None = None
     id: int | None = None
+
+
+@dataclass(frozen=True)
+class Project:
+    """A project's current state, from its latest `project` entry."""
+
+    id: str
+    name: str
+    home_root_id: str | None = None
+    folders: tuple[ProjectFolder, ...] = ()

@@ -46,7 +46,7 @@ def test_fixture_per_kind_parses(name: str) -> None:
     assert entry.is_supported_kind
 
 
-@pytest.mark.parametrize("name", [*KIND_FIXTURES, "unknown_fields"])
+@pytest.mark.parametrize("name", [*KIND_FIXTURES, "unknown_fields", "project_folders"])
 def test_round_trip(name: str) -> None:
     entry = parse_entry(load(name))
     again = parse_entry(json.loads(serialize_entry(entry)))
@@ -193,3 +193,31 @@ def test_make_entry_rejects_invalid() -> None:
         make_entry("note", Author("A"), "dev_x", "")
     with pytest.raises(TypeError, match="colour"):
         make_entry("note", Author("A"), "dev_x", "t", colour="red")
+
+
+def test_project_folders_fixture() -> None:
+    entry = parse_entry(load("project_folders"))
+    assert entry.project is not None and entry.project.folders is not None
+    assert [(f.root_id[-1], f.path) for f in entry.project.folders] == [
+        ("A", "Protocols/WB"),
+        ("B", ""),
+    ]
+    # The older project fixture has no folder list: "not stated", not "none".
+    older = parse_entry(load("project"))
+    assert older.project is not None and older.project.folders is None
+
+
+@pytest.mark.parametrize(
+    ("folder", "field"),
+    [
+        ({"path": "x"}, "project.folders[0].root_id"),
+        ({"root_id": "root_x", "path": "../up"}, "project.folders[0].path"),
+        ({"root_id": "root_x", "path": "a\\b"}, "project.folders[0].path"),
+    ],
+)
+def test_invalid_project_folders_name_the_field(folder: dict[str, Any], field: str) -> None:
+    data = load("project_folders")
+    data["project"]["folders"] = [folder]
+    with pytest.raises(RecordFormatError) as info:
+        parse_entry(data)
+    assert info.value.field == field

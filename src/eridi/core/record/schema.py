@@ -18,6 +18,7 @@ from eridi.core.models import (
     Entry,
     EntryChange,
     Link,
+    ProjectFolder,
     ProjectRef,
     Subject,
     parse_timestamp,
@@ -179,13 +180,35 @@ def _parse_link(value: Any, where: str) -> Link:
     )
 
 
+def _parse_project_folder(value: Any, where: str) -> ProjectFolder:
+    data = _object(value, where)
+    root_id = _string(_require(data, "root_id", f"{where}."), f"{where}.root_id", allow_empty=False)
+    raw_path = _string(data.get("path", ""), f"{where}.path")
+    path = ""
+    if raw_path:
+        try:
+            path = normalize_relative(raw_path)
+        except ValueError as exc:
+            _fail(f"{where}.path", str(exc))
+        if path != raw_path:
+            _fail(f"{where}.path", f"must be POSIX-style and normalized, e.g. {path!r}")
+    return ProjectFolder(root_id, path, _unknown(data, {"root_id", "path"}))
+
+
 def _parse_project(value: Any) -> ProjectRef:
     data = _object(value, "project")
+    folders = None
+    if data.get("folders") is not None:
+        folders = tuple(
+            _parse_project_folder(item, f"project.folders[{i}]")
+            for i, item in enumerate(_parse_list(data["folders"], "project.folders"))
+        )
     return ProjectRef(
         id=_string(_require(data, "id", "project."), "project.id", allow_empty=False),
         name=_string(_require(data, "name", "project."), "project.name", allow_empty=False),
         home_root_id=_optional_string(data.get("home_root_id"), "project.home_root_id"),
-        extra_unknown=_unknown(data, {"id", "name", "home_root_id"}),
+        folders=folders,
+        extra_unknown=_unknown(data, {"id", "name", "home_root_id", "folders"}),
     )
 
 
@@ -340,6 +363,11 @@ def entry_to_dict(entry: Entry) -> JSON:
     if entry.project is not None:
         p = entry.project
         project: JSON = {"id": p.id, "name": p.name, "home_root_id": p.home_root_id}
+        if p.folders is not None:
+            project["folders"] = [
+                _with_unknown({"root_id": f.root_id, "path": f.path}, f.extra_unknown)
+                for f in p.folders
+            ]
         out["project"] = _with_unknown(project, p.extra_unknown)
     return _with_unknown(out, entry.extra_unknown)
 

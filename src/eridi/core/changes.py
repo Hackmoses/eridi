@@ -15,6 +15,7 @@ from typing import Literal
 
 from eridi.core.config import Config
 from eridi.core.index.files import text_versions
+from eridi.core.index.projects import file_in_project_sql
 from eridi.core.models import FileInfo
 from eridi.core.snapshots import SnapshotStore
 
@@ -179,11 +180,7 @@ def pending_changes(
     project_filter = ""
     params: list[object] = []
     if project is not None:
-        project_filter = (
-            "AND EXISTS (SELECT 1 FROM project_roots pr WHERE pr.project_id = ? "
-            "AND pr.root_id = f.root_id AND (pr.path_prefix = '' OR f.path = pr.path_prefix "
-            "OR substr(f.path, 1, length(pr.path_prefix) + 1) = pr.path_prefix || '/'))"
-        )
+        project_filter = "AND " + file_in_project_sql("f")
         params.append(project)
     rows = conn.execute(
         f"""

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from eridi.core.index.db import get_meta, set_meta
-from eridi.core.models import Entry, format_timestamp, parse_timestamp
+from eridi.core.models import Entry, ProjectFolder, format_timestamp, parse_timestamp
 from eridi.core.record.schema import parse_entry, serialize_entry
 from eridi.core.record.store import RecordProblem, RecordStore
 from eridi.core.record.views import resolve
@@ -102,6 +102,8 @@ def _refresh_states(conn: sqlite3.Connection, new_ids: set[str]) -> None:
             )
 
     conn.execute("DELETE FROM projects")
+    conn.execute("DELETE FROM project_roots")
+    folders: dict[str, tuple[ProjectFolder, ...]] = {}
     for _, _, entry in loaded:  # oldest first, so the latest project entry wins
         if entry.kind == "project" and entry.project and items[entry.id].state == "current":
             p = entry.project
@@ -111,6 +113,12 @@ def _refresh_states(conn: sqlite3.Connection, new_ids: set[str]) -> None:
                 "home_root_id = excluded.home_root_id",
                 (p.id, p.name, p.home_root_id),
             )
+            if p.folders is not None:  # an entry that doesn't list folders keeps them
+                folders[p.id] = p.folders
+    conn.executemany(
+        "INSERT OR IGNORE INTO project_roots (project_id, root_id, path_prefix) VALUES (?, ?, ?)",
+        [(pid, f.root_id, f.path) for pid, fs in folders.items() for f in fs],
+    )
 
 
 def _known_ids(conn: sqlite3.Connection) -> set[str]:
