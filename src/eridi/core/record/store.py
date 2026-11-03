@@ -33,9 +33,18 @@ RECORDSET_SCHEMA = "eridi.recordset/1"
 ENTRIES_DIR = "entries"
 TMP_DIR = ".tmp"
 ENTRY_FILE_RE = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}\.json$")
+# Sync apps name their conflict copies after the original: `<ULID> (1).json`,
+# `<ULID>-DESKTOP-ABC.json`, `<ULID> (conflicted copy 2026-11-03).json`, …
+CONFLICT_COPY_RE = re.compile(r"^([0-9A-HJKMNP-TV-Z]{26})[^0-9A-HJKMNP-TV-Z].*\.json$", re.I)
 NEWER_VERSION_WARNING = "Some record entries were written by a newer version. Update to see them."
 # Files operating systems drop into folders; not worth reporting.
 _OS_FILES = {"desktop.ini", "thumbs.db", "icon\r"}
+
+
+def conflict_original(path: Path) -> str | None:
+    """The entry ID a sync conflict copy was made from, or None if it isn't one."""
+    match = CONFLICT_COPY_RE.match(path.name)
+    return match.group(1).upper() if match else None
 
 
 class RecordFolderError(ValueError):
@@ -116,6 +125,13 @@ class RecordStore:
             overwrite=False,
         )
         return target
+
+    def marker_copies(self) -> list[Path]:
+        """Sync conflict copies of the folder marker, e.g. `eridi-record (1).json`."""
+        stem = MARKER_NAME.removesuffix(".json")
+        return sorted(
+            p for p in self.folder.glob(f"{stem}*.json") if p.name != MARKER_NAME and p.is_file()
+        )
 
     def _entry_files(self, result: RecordRead) -> Iterator[Path]:
         stack = [self.entries_dir]

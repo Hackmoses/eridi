@@ -88,3 +88,7 @@ markers = [
     "perf: performance tests (skip with -m 'not perf')",
     "browser: drives the web UI in Chromium (Linux CI only)",
 ]
+filterwarnings = [
+    # watchdog's inotify backend warns when a folder is created while it adds a recursive watch
+    "ignore:Callback with id:RuntimeWarning",
+]

@@ -232,7 +232,7 @@ def test_doctor(lab: Eridi, sample_lab: SampleLab) -> None:
     entry_file = next((lab.store.folder / "entries").rglob("*.json"))
     entry_file.with_name(entry_file.stem + " (1).json").write_bytes(entry_file.read_bytes())
     report = lab.doctor()
-    assert any(c.name == "Record file ignored" for c in report.checks)
+    assert any(c.name == "Sync conflict copy" for c in report.checks)
     assert record_file.exists()
 
 

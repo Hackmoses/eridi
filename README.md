@@ -18,8 +18,8 @@ useful as AI improves.
 
 ## Status
 
-v0, pre-alpha: the command line, the local web app and the MCP server work on local and
-synced folders. Try it:
+v0.5, pre-alpha: the command line, the local web app and the MCP server work on local and
+synced folders, with projects and a record shared by the lab. Try it:
 
 ```bash
 uv sync
@@ -32,6 +32,8 @@ uv run eridi why <file>                 # shows the diff, asks why
 uv run eridi activity                   # what you edited recently, newest first
 uv run eridi watch                      # record edits seconds after you save
 uv run eridi open                       # the web app in your browser
+uv run eridi project new "Antibody validation" --folder "<folder>"
+uv run eridi init --join "<shared record folder>"   # share a labmate's record
 ```
 
 `uv run eridi --help` lists every command. To use Eridi from Claude, see

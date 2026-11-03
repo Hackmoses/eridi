@@ -62,7 +62,12 @@ from eridi.core.models import (
 )
 from eridi.core.paths import PathOutsideRootError, app_home, normalize_relative, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
-from eridi.core.record.store import MARKER_NAME, RecordFolderError, RecordStore
+from eridi.core.record.store import (
+    MARKER_NAME,
+    RecordFolderError,
+    RecordStore,
+    conflict_original,
+)
 from eridi.core.record.views import HistoryItem, history
 from eridi.core.scan import Progress, ScanReport, scan_files, scan_root
 from eridi.core.snapshots import SnapshotStore
@@ -1163,15 +1168,40 @@ class Eridi:
                     "Record folder", "ok",
                     f"{self.store.folder}: {len(read.entries)} entries.",
                 )  # fmt: skip
+                present = {e.id for e in read.entries}
                 for problem in read.problems:
+                    original = conflict_original(problem.path)
+                    if original is None:
+                        report.add(
+                            "Record file ignored", "warning", f"{problem.path}: {problem.reason}"
+                        )
+                    elif original in present:
+                        report.add(
+                            "Sync conflict copy", "warning",
+                            f"{problem.path}: a duplicate your sync app made of entry "
+                            f"{original}, which is intact. Eridi ignores it; you can delete it.",
+                        )  # fmt: skip
+                    else:
+                        report.add(
+                            "Sync conflict copy", "warning",
+                            f"{problem.path}: a copy your sync app made of entry {original}, "
+                            f"whose original is missing. Rename it to {original}.json to "
+                            "restore the entry.",
+                        )  # fmt: skip
+                for copy in self.store.marker_copies():
                     report.add(
-                        "Record file ignored", "warning", f"{problem.path}: {problem.reason}"
-                    )
+                        "Sync conflict copy", "warning",
+                        f"{copy}: a copy of the record folder's marker. Eridi uses "
+                        f"{MARKER_NAME}; you can delete this copy.",
+                    )  # fmt: skip
                 if read.newer_version:
+                    names = ", ".join(p.name for p in read.newer_version[:3])
+                    more = "…" if len(read.newer_version) > 3 else ""
                     report.add(
                         "Newer entries", "warning",
-                        f"{len(read.newer_version)} entries were written by a newer version of "
-                        "Eridi. Update to see them.",
+                        f"{len(read.newer_version)} entries ({names}{more}) were written by a "
+                        "newer version of Eridi, probably by a labmate. Update Eridi to see "
+                        "them; until then they're kept but not shown.",
                     )  # fmt: skip
             except (EridiError, OSError) as exc:
                 report.add("Record folder", "error", str(exc))
@@ -1187,6 +1217,15 @@ class Eridi:
                 else:
                     state = "search on" if root.search else "search off"
                     report.add(f"Storage {root.label!r}", "ok", f"{location} ({state}).")
+                    marker = self.root_marker(root.id)
+                    if marker is not None and marker != root.id:
+                        report.add(
+                            f"Storage {root.label!r}", "warning",
+                            f"The folder is marked as storage {marker} (by another computer "
+                            f"or a labmate), but this computer calls it {root.id}, so notes "
+                            "about its files don't line up. Run "
+                            f"`eridi storage mark {root.id}` to use the shared ID.",
+                        )  # fmt: skip
             counts = dict(
                 self.conn.execute(
                     "SELECT extract_status, count(*) FROM files WHERE status = 'present' "
