@@ -12,7 +12,7 @@ from pathlib import Path
 
 from eridi.connectors.local import LocalConnector
 from eridi.core.config import Settings
-from eridi.core.index.ingest import read_and_extract
+from eridi.core.scan import read_and_extract
 
 
 def main() -> int:

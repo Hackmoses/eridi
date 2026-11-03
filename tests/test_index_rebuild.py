@@ -10,12 +10,12 @@ from conftest import SampleLab, entry
 from eridi.connectors.local import LocalConnector
 from eridi.core.config import Settings
 from eridi.core.index.db import open_index
-from eridi.core.index.ingest import index_root
 from eridi.core.index.rebuild import rebuild
 from eridi.core.index.records import sync_records
 from eridi.core.index.search import search
 from eridi.core.models import Root, Subject
 from eridi.core.record.store import RecordStore
+from eridi.core.scan import scan_root
 from eridi.core.snapshots import SnapshotStore
 
 QUERIES = [
@@ -59,6 +59,13 @@ def snapshot(conn: sqlite3.Connection) -> dict[str, Any]:
         "subjects": sorted(tuple(r) for r in conn.execute("SELECT * FROM entry_subjects")),
         "projects": [tuple(r) for r in conn.execute("SELECT * FROM projects ORDER BY id")],
         "roots": [tuple(r) for r in conn.execute("SELECT * FROM roots ORDER BY id")],
+        "moves": sorted(
+            tuple(r)
+            for r in conn.execute(
+                "SELECT f.path, m.from_path, m.to_path, m.moved_at "
+                "FROM file_moves m JOIN files f ON f.id = m.file_id"
+            )
+        ),
         "versions": sorted(
             tuple(r)
             for r in conn.execute(
@@ -77,7 +84,7 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     incremental = open_index(tmp_path / "incremental.sqlite")
 
     # Day 1: first index, a note.
-    index_root(incremental, root, connector, size_limit=SETTINGS.size_limit_bytes, snapshots=snaps)
+    scan_root(incremental, root, connector, snaps, SETTINGS)
     protocol = Subject(root.id, "Protocols/Western_blot_blocking_v7.docx")
     first = entry(
         text="Primary antibody incubation is 1 h because of the old lot.", subjects=[protocol]
@@ -90,10 +97,11 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     doc.add_paragraph("Primary antibody incubation: overnight at 4 °C.")
     doc.save(str(sample_lab.protocol_docx))
     sample_lab.analysis_r.unlink()
+    sample_lab.lot_log_xlsx.rename(sample_lab.lot_log_xlsx.with_name("Antibody_lots.xlsx"))
     (sample_lab.root / "Notes" / "new_notebook_entry.md").write_text(
         "# Notebook\nLot B2291 behaved well.\n", encoding="utf-8"
     )
-    index_root(incremental, root, connector, size_limit=SETTINGS.size_limit_bytes, snapshots=snaps)
+    scan_root(incremental, root, connector, snaps, SETTINGS)
     store.append(
         entry(
             text="Incubation is now overnight at 4 °C; signal restored.",
@@ -108,7 +116,7 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     sync_records(incremental, store)
 
     rebuilt = open_index(tmp_path / "rebuilt.sqlite")
-    report = rebuild(rebuilt, [root], store, SETTINGS, snaps)
+    report = rebuild(rebuilt, [root], store, snaps, SETTINGS)
     assert report.unavailable == {}
     assert report.record is not None and report.record.full
 
@@ -121,12 +129,19 @@ def test_rebuild_equals_incremental(sample_lab: SampleLab, tmp_path: Path) -> No
     assert before["search"]["overnight"]  # the comparison isn't vacuous
     protocol_versions = [v for v in before["versions"] if v[1] == protocol.path]
     assert len(protocol_versions) == 2  # history survived the rebuild
+    assert [m[:3] for m in before["moves"]] == [
+        (
+            "Inventory/Antibody_lots.xlsx",
+            "Inventory/Antibody_lot_log_2026.xlsx",
+            "Inventory/Antibody_lots.xlsx",
+        )
+    ]
     assert ("file", "root_LAB:Analysis/densitometry_analysis.R") not in [
         h[:2] for h in before["search"]["GAPDH"]
     ]
 
     # Rebuilding in place, over the existing index, gives the same again.
-    rebuild(incremental, [root], store, SETTINGS, snaps)
+    rebuild(incremental, [root], store, snaps, SETTINGS)
     assert snapshot(incremental) == after
     incremental.close()
     rebuilt.close()
@@ -141,7 +156,7 @@ def test_rebuild_skips_unsearched_and_unavailable_roots(
         Root("root_USB", "USB stick", str(tmp_path / "unplugged")),
         Root("root_CLOUD", "Future cloud", "drive-id", kind="dropbox"),
     ]
-    report = rebuild(conn, roots, None)
+    report = rebuild(conn, roots, None, SnapshotStore())
     assert set(report.unavailable) == {"root_USB", "root_CLOUD"}
     assert "can't be found" in report.unavailable["root_USB"]
     assert conn.execute("SELECT count(*) FROM files").fetchone()[0] == 0

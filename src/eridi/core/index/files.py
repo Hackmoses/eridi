@@ -191,3 +191,29 @@ def restore_versions(conn: sqlite3.Connection, lines: list[VersionLine]) -> None
         "INSERT OR IGNORE INTO text_versions (file_id, text_sha256, first_seen, source) "
         "SELECT id, text_sha256, last_seen, 'scan' FROM files WHERE text_sha256 IS NOT NULL"
     )
+
+
+def move_file(conn: sqlite3.Connection, old: FileInfo, new: FileInfo, moved_at: str) -> None:
+    """`old` was renamed to `new`: give `new` the old file's history, then drop `old`'s row.
+
+    When both have a version with the same text, the earlier `first_seen` wins, matching
+    how a rebuild replays the version log.
+    """
+    if old.id is None or new.id is None:
+        raise ValueError("Both files must be stored in the index before a move.")
+    for sha, first_seen, source in text_versions(conn, old.id):
+        conn.execute(
+            "INSERT INTO text_versions (file_id, text_sha256, first_seen, source) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (file_id, text_sha256) DO UPDATE SET "
+            "first_seen = min(first_seen, excluded.first_seen), "
+            "source = CASE WHEN excluded.first_seen < first_seen THEN excluded.source "
+            "ELSE source END",
+            (new.id, sha, first_seen, source),
+        )
+    conn.execute("UPDATE file_moves SET file_id = ? WHERE file_id = ?", (new.id, old.id))
+    conn.execute(
+        "INSERT INTO file_moves (file_id, from_path, to_path, moved_at) VALUES (?, ?, ?, ?)",
+        (new.id, old.path, new.path, moved_at),
+    )
+    conn.execute("DELETE FROM files_fts WHERE rowid = ?", (old.id,))
+    conn.execute("DELETE FROM files WHERE id = ?", (old.id,))

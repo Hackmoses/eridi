@@ -10,13 +10,16 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Literal
 
-ExtractStatus = Literal["ok", "needs_ocr", "cloud_document", "name_only", "too_large", "error"]
+ExtractStatus = Literal[
+    "ok", "needs_ocr", "cloud_document", "name_only", "too_large", "online_only", "error"
+]
 """
 - ok: text extracted
 - needs_ocr: a PDF with little or no text layer (probably scanned)
 - cloud_document: a Google Docs/Sheets/Slides shortcut; the content lives online (M12)
 - name_only: a type Eridi can't read; only its name and path are indexed
 - too_large: over the size limit; not read
+- online_only: a sync client keeps it only in the cloud; not downloaded
 - error: the file could not be read; `reason` says why
 """
 

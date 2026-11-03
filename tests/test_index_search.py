@@ -12,7 +12,6 @@ from conftest import SampleLab, entry
 from eridi.connectors.local import LocalConnector
 from eridi.core.index.db import open_index
 from eridi.core.index.files import upsert_file, upsert_root
-from eridi.core.index.ingest import index_root
 from eridi.core.index.records import sync_records
 from eridi.core.index.search import (
     HIGHLIGHT_END,
@@ -23,6 +22,8 @@ from eridi.core.index.search import (
 )
 from eridi.core.models import FileInfo, Root, Subject
 from eridi.core.record.store import RecordStore
+from eridi.core.scan import scan_root
+from eridi.core.snapshots import SnapshotStore
 
 ROOT = Root("root_LAB", "Lab Drive", "")
 PROTOCOL_PATH = "Protocols/Western_blot_blocking_v7.docx"
@@ -40,7 +41,7 @@ def lab_index(
     conn: sqlite3.Connection, sample_lab: SampleLab, tmp_path: Path
 ) -> tuple[sqlite3.Connection, RecordStore]:
     root = Root(ROOT.id, ROOT.label, str(sample_lab.root))
-    index_root(conn, root, LocalConnector(sample_lab.root, root.id), size_limit=25 * 2**20)
+    scan_root(conn, root, LocalConnector(sample_lab.root, root.id), SnapshotStore())
     store = RecordStore.init(tmp_path / "record")
     store.append(
         entry(
