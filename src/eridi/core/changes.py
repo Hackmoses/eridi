@@ -193,7 +193,7 @@ def pending_changes(
           AND (SELECT count(*) FROM text_versions o WHERE o.file_id = f.id) > 1
           AND NOT EXISTS (
             SELECT 1 FROM entries e
-            WHERE e.state != 'retracted' AND e.kind != 'tombstone' AND (
+            WHERE e.state != 'retracted' AND e.kind NOT IN ('tombstone', 'outcome') AND (
               e.change_to_text_sha256 = f.text_sha256
               OR e.id IN (SELECT s.entry_id FROM entry_subjects s
                           WHERE s.text_sha256 = f.text_sha256)))
@@ -303,7 +303,7 @@ def recent_activity(
             for e in conn.execute(
                 "SELECT DISTINCT e.id, e.text, e.author_name, e.outcome FROM entries e "
                 "LEFT JOIN entry_subjects s ON s.entry_id = e.id "
-                "WHERE e.state = 'current' AND e.kind != 'tombstone' "
+                "WHERE e.state = 'current' AND e.kind NOT IN ('tombstone', 'outcome') "
                 "AND (e.change_to_text_sha256 = ? OR s.text_sha256 = ?) ORDER BY e.id",
                 (sha, sha),
             )

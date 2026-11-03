@@ -90,6 +90,7 @@ from eridi.core.outbox import (
     SaveRefusedError,
     free_name,
 )
+from eridi.core.outcomes import Outcomes
 from eridi.core.paths import PathOutsideRootError, app_home, normalize_relative, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
 from eridi.core.record.store import (
@@ -182,6 +183,8 @@ class VersionInfo:
     available: bool
     """The text is still stored, so it can be diffed."""
     is_current: bool
+    outcome: str | None = None
+    """Did this version work? From an outcome entry about it, or the note explaining it."""
 
 
 @dataclass(frozen=True)
@@ -1506,22 +1509,33 @@ class Eridi:
         *,
         entry_id: str | None = None,
         file: str | None = None,
+        version: str | None = None,
         text: str = "",
         author_kind: str = "human",
         agent_name: str | None = None,
     ) -> Entry:
-        """Record whether something worked, for an earlier entry or a file's current version."""
+        """Record whether something worked: for an earlier entry, or a file version (the
+        current one unless `version` names another by its text hash or a prefix of it)."""
         self._require_init()
         if outcome not in OUTCOMES:
             raise EridiError(f"Outcome must be one of: {', '.join(OUTCOMES)}.")
+        if version is not None and file is None:
+            raise EridiError("A version belongs to a file: give the file too.")
         if (entry_id is None) == (file is None):
             raise EridiError("Give either the entry or the file the outcome is about.")
         with self._lock:
             subjects: list[Subject] = []
             if entry_id is not None and self._get_entry(entry_id) is None:
                 raise UnknownEntryError(entry_id)
+            if version is not None and file is None:
+                raise EridiError("A version belongs to a file: give the file too.")
             if file is not None:
-                subjects.append(self._subject(self._resolve_file(file)))
+                info = self._resolve_file(file)
+                subject = self._subject(info)
+                if version is not None:
+                    subject = replace(subject, text_sha256=self._version_of(info, version),
+                                      content_sha256=None)  # fmt: skip
+                subjects.append(subject)
             entry = make_entry(
                 "outcome",
                 self._author(author_kind, agent_name),
@@ -1532,6 +1546,27 @@ class Eridi:
                 subjects=subjects,
             )
             return self._append(entry)
+
+    def _version_of(self, file: FileInfo, ref: str) -> str:
+        assert file.id is not None  # noqa: S101 - files from the index have IDs
+        ref = ref.strip().lower()
+        shas = [sha for sha, _, _ in text_versions(self.conn, file.id)]
+        hits = [sha for sha in shas if sha.startswith(ref)] if len(ref) >= 4 else []
+        if len(hits) != 1:
+            raise EridiError(
+                f"{file.path} has no single version {ref!r}. See its versions with "
+                f"`eridi history {file.path!r}`."
+            )
+        return hits[0]
+
+    def outcomes(self) -> Outcomes:
+        """Every current outcome, to look up entries and versions."""
+        with self._lock:
+            self._refresh_records()
+            rows = self.conn.execute(
+                "SELECT json FROM entries WHERE state = 'current' AND kind != 'tombstone'"
+            ).fetchall()
+        return Outcomes(parse_entry(json.loads(r[0])) for r in rows)
 
     def retract(self, entry_id: str, reason: str = "") -> Entry:
         """Retract an entry (it stays in history, labeled retracted)."""
@@ -1620,10 +1655,20 @@ class Eridi:
             for path in paths:
                 for item in history(entries, file.root_id, path):
                     items[item.entry.id] = item
-            versions = [
-                VersionInfo(sha, seen, source, self.snapshots.has(sha), sha == file.text_sha256)
-                for sha, seen, source in text_versions(self.conn, file.id)
-            ]
+            outcomes = Outcomes(i.entry for i in items.values() if i.state == "current")
+            versions = []
+            for sha, seen, source in text_versions(self.conn, file.id):
+                verdict = outcomes.for_version(sha)
+                versions.append(
+                    VersionInfo(
+                        sha,
+                        seen,
+                        source,
+                        self.snapshots.has(sha),
+                        sha == file.text_sha256,
+                        verdict.outcome if verdict else None,
+                    )
+                )
             return FileHistory(
                 file,
                 self.root_label(file.root_id),

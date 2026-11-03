@@ -882,15 +882,19 @@ def outcome(
     target: Annotated[str, typer.Argument(help="An entry ID, or a file.")],
     result: Annotated[str, typer.Argument(help=OUTCOME_HELP)],
     text: Annotated[str, typer.Option(help="Details (optional).")] = "",
+    version: Annotated[
+        str | None,
+        typer.Option(help="For a file: the version (from `eridi history`); default current."),
+    ] = None,
 ) -> None:
-    """Record whether something worked."""
+    """Record whether something worked: for a note or decision, or a file's version."""
     check_outcome(result)
     with session() as eridi:
         if len(target) == 26 and target.isalnum():
             entry = eridi.add_outcome(result, entry_id=target.upper(), text=text)
         else:
             ref = file_id(pick_file(eridi, target))
-            entry = eridi.add_outcome(result, file=ref, text=text)
+            entry = eridi.add_outcome(result, file=ref, version=version, text=text)
         console().print(f"Saved outcome {entry.id}: {result}.")
 
 
@@ -937,6 +941,7 @@ def history_command(
                 for m in (
                     "current" if v.is_current else "",
                     "" if v.available else "text not stored",
+                    v.outcome or "",
                 )
                 if m
             ]
@@ -947,8 +952,14 @@ def history_command(
         out.print("[bold]Record[/bold]")
         if not hist.entries:
             out.print("  Nothing recorded yet.")
+        outcomes = eridi.outcomes()
         for item in hist.entries:
             label = "" if item.state == "current" else f" [yellow]({item.state})[/yellow]"
+            result = (
+                outcomes.outcome_of(item.entry) if item.entry.kind in ("note", "decision") else None
+            )
+            if result and result != item.entry.outcome:
+                label += f" [dim]→ {result}[/dim]"
             out.print(
                 f"  {escape(describe_entry(eridi, item.entry))}{label}  [dim]{item.entry.id}[/dim]"
             )

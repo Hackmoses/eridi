@@ -97,17 +97,36 @@ function diffView(diff) {
     }));
 }
 
-function entryCard(entry, currentFile) {
+function outcomeBadge(result) {
+  return result ? el("span", { class: "outcome outcome-" + result }, result) : null;
+}
+
+// Three buttons that record "did it work?" for an entry or a file version.
+function quickOutcome(body, done, label) {
+  const box = el("div", { class: "quick-outcome", role: "group", "aria-label": label || "Did it work?" });
+  for (const [result, text] of [["worked", "Worked"], ["partial", "Partly"], ["failed", "Failed"]]) {
+    box.append(el("button", { type: "button", class: "secondary small", onclick: async () => {
+      try { await api("/outcomes", { body: { ...body, outcome: result } }); done(result); }
+      catch (error) { alert(error.message); }
+    } }, text));
+  }
+  return box;
+}
+
+function entryCard(entry, currentFile, onOutcome) {
   const files = entry.files.filter((f) => f.id !== currentFile);
   const meta = [entry.kind, entry.author + (entry.author_kind === "agent" ? " (AI)" : ""), when(entry.created_at)];
+  const result = entry.result || entry.outcome;
+  const askable = onOutcome && entry.state === "current" && (entry.kind === "note" || entry.kind === "decision");
   return el("article", { class: "entry state-" + entry.state },
     el("div", { class: "meta" },
       meta.join(" · "),
-      entry.outcome ? el("span", { class: "outcome outcome-" + entry.outcome }, entry.outcome) : null,
+      outcomeBadge(result),
       entry.state !== "current" ? el("span", { class: "state" }, entry.state) : null),
     entry.change ? el("p", { class: "change" }, entry.change) : null,
     entry.text ? el("p", { class: "text" }, entry.text) : null,
-    files.length ? el("p", { class: "files" }, files.map((f) => historyLink(f.id, f.path))) : null);
+    files.length ? el("p", { class: "files" }, files.map((f) => historyLink(f.id, f.path))) : null,
+    askable ? quickOutcome({ entry_id: entry.id }, onOutcome) : null);
 }
 
 // --- screens ---
@@ -260,6 +279,10 @@ function changeCard(change, i) {
     el("div", { class: "meta" }, [change.storage, when(change.detected_at)].filter(Boolean).join(" · ")),
     el("p", { class: "summary" }, change.summary || "Text changed"),
     toggle, diffBox,
+    quickOutcome({ file: change.file_id }, (result) => {
+      const badge = card.querySelector(".summary");
+      badge.replaceChildren(change.summary || "Text changed", " ", outcomeBadge(result));
+    }, "Did this version work?"),
     el("label", { for: "why-" + i }, "Why"), why,
     el("div", { class: "actions" },
       el("label", { for: "outcome-" + i, class: "visually-hidden" }, "Outcome"), outcome,
@@ -282,14 +305,16 @@ async function renderHistory(params) {
   try {
     const data = await api("/history?file=" + encodeURIComponent(file));
     const f = data.file;
+    const again = () => renderHistory(params);
     const events = [
       ...data.versions.map((v) => ({ at: v.first_seen, node: el("li", { class: "version" },
-        el("div", { class: "meta" }, when(v.first_seen)),
+        el("div", { class: "meta" }, when(v.first_seen), outcomeBadge(v.outcome)),
         el("p", {}, v.current ? "Current version" : "Version", el("code", {}, " " + v.text_sha256.slice(0, 8)),
-          v.available ? null : el("span", { class: "muted" }, " (text not stored)"))) })),
+          v.available ? null : el("span", { class: "muted" }, " (text not stored)")),
+        quickOutcome({ file: f.id, version: v.text_sha256 }, again, "Did this version work?")) })),
       ...data.moves.map((m) => ({ at: m.at, node: el("li", { class: "move" },
         el("div", { class: "meta" }, when(m.at)), el("p", {}, "Moved from " + m.from)) })),
-      ...data.entries.map((e) => ({ at: e.created_at, node: el("li", {}, entryCard(e, f.id)) })),
+      ...data.entries.map((e) => ({ at: e.created_at, node: el("li", {}, entryCard(e, f.id, again)) })),
     ].sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
     const text = el("textarea", { id: "note", name: "note", rows: 3, required: true });
     const outcome = outcomeSelect("note-outcome");
@@ -594,7 +619,7 @@ async function renderProject(params) {
     el("h2", { id: "record-h" }, "Record"),
     el("ol", { class: "timeline" }, p.entries.map((e) => el("li", {},
       e.kind === "project" ? el("p", { class: "muted" }, `Project "${e.project_name}" · ${e.author} · ${when(e.created_at)}`)
-        : entryCard(e, null)))));
+        : entryCard(e, null, again)))));
 
   main.append(...[heading, renameForm, message, search, results, changes, saving, folders, files, noteForm, timeline]
     .filter(Boolean));

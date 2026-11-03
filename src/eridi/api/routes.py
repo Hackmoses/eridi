@@ -15,6 +15,7 @@ from eridi.core.config import ConfigError
 from eridi.core.index.search import SearchHit, group_label
 from eridi.core.models import Entry, FileInfo, Project, Root
 from eridi.core.outbox import OutboxJob
+from eridi.core.outcomes import Outcomes
 from eridi.core.record.store import RecordFolderError
 from eridi.core.service import (
     AmbiguousFileError,
@@ -73,8 +74,13 @@ def file_json(f: FileInfo, label: str | None = None) -> dict[str, Any]:
     }
 
 
-def entry_json(eridi: Eridi, e: Entry, state: str | None = None) -> dict[str, Any]:
+def entry_json(
+    eridi: Eridi, e: Entry, state: str | None = None, outcomes: Outcomes | None = None
+) -> dict[str, Any]:
+    """`result` is the current outcome (from later outcome entries too), when `outcomes`
+    is given; `outcome` is what the entry itself says."""
     return {
+        "result": outcomes.outcome_of(e) if outcomes is not None else e.outcome,
         "id": e.id,
         "kind": e.kind,
         "created_at": e.created_at,
@@ -210,6 +216,7 @@ class OutcomeIn(BaseModel):
     outcome: str
     entry_id: str | None = None
     file: str | None = None
+    version: str | None = Field(default=None, max_length=64)
     text: str = Field(default="", max_length=20_000)
 
 
@@ -332,7 +339,7 @@ def add_outcome(request: Request, body: OutcomeIn) -> Any:
     eridi = _eridi(request)
     try:
         entry = eridi.add_outcome(body.outcome, entry_id=body.entry_id, file=body.file,
-                                  text=body.text)  # fmt: skip
+                                  version=body.version, text=body.text)  # fmt: skip
     except KNOWN_ERRORS as exc:
         return error(exc)
     return JSONResponse(entry_json(eridi, entry), status_code=201)
@@ -373,6 +380,7 @@ def history(request: Request, file: str) -> Any:
     eridi = _eridi(request)
     try:
         h = eridi.file_history(file)
+        outcomes = eridi.outcomes()
     except KNOWN_ERRORS as exc:
         return error(exc)
     return {
@@ -383,11 +391,12 @@ def history(request: Request, file: str) -> Any:
                 "first_seen": v.first_seen,
                 "current": v.is_current,
                 "available": v.available,
+                "outcome": v.outcome,
             }
             for v in h.versions
         ],
         "moves": [{"from": f, "to": t, "at": at} for f, t, at in h.moves],
-        "entries": [entry_json(eridi, i.entry, i.state) for i in h.entries],
+        "entries": [entry_json(eridi, i.entry, i.state, outcomes) for i in h.entries],
     }
 
 

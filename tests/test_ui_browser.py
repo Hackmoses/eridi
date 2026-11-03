@@ -174,3 +174,24 @@ def test_save_a_file_into_a_project(browser: Any, sample_lab: SampleLab, tmp_pat
             page.get_by_role("button", name="Save to Lab Drive").click()
             page.wait_for_selector("text=isn't approved")
             assert errors == []
+
+
+def test_quick_outcome_buttons(browser: Any, sample_lab: SampleLab, tmp_path: Path) -> None:
+    """M13.1: "Worked" on a note in a file's history records an outcome."""
+    with Eridi() as eridi:
+        eridi.init("A. Okafor", None, tmp_path / "record")
+        root = eridi.add_root(sample_lab.root, "Lab Drive")
+        eridi.scan()
+        note = eridi.add_note("Blocking for 1 h is enough.", file=PROTOCOL)
+        with live_server(eridi) as (port, guard):
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(
+                f"http://127.0.0.1:{port}/?t={guard.new_link()}#/history?file={root.id}:{PROTOCOL}"
+            )
+            page.wait_for_selector(".timeline")
+            page.locator(".entry").get_by_role("button", name="Worked").click()
+            page.wait_for_selector(".entry .outcome-worked")
+            assert errors == []
+        assert eridi.outcomes().outcome_of(note) == "worked"
