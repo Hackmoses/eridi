@@ -244,3 +244,30 @@ def test_ctrl_c_during_scan_explains(lab: SampleLab, monkeypatch: pytest.MonkeyP
     result = run("scan")
     assert result.exit_code == 130
     assert "Work done so far is kept" in result.output
+
+
+def test_dismiss_all(lab: SampleLab) -> None:
+    edit_protocol(lab, "Primary antibody incubation: 7 h at RT.")
+    (lab.notes_md).write_text("# Lab meeting\nchanged\n", encoding="utf-8")
+    ok("scan")
+    assert "Dismissed 2 changes." in ok("dismiss", "--all")
+    assert "Nothing waiting" in ok("changes")
+    assert "use --all" in fails("dismiss")
+
+
+def test_parser_warnings_never_reach_the_terminal(lab: SampleLab) -> None:
+    import warnings
+
+    from eridi.core.extract.base import extract, register
+
+    @register(".warny")
+    def noisy(data: bytes) -> object:
+        from eridi.core.extract.base import ExtractResult
+
+        warnings.warn("Data Validation extension is not supported", UserWarning, stacklevel=1)
+        return ExtractResult("fine")
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert extract("x.warny", b"").text == "fine"
+    assert caught == []

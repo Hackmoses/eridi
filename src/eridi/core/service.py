@@ -550,6 +550,17 @@ class Eridi:
                     replace(self._config, dismissed_changes=(*self._config.dismissed_changes, key))
                 )
 
+    def dismiss_all(self) -> int:
+        """Dismiss every pending change (e.g. after first connecting old folders)."""
+        with self._lock:
+            keys = [c.key for c in self.pending_changes()]
+            new = [k for k in keys if k not in self._config.dismissed_changes]
+            if new:
+                self._save(
+                    replace(self._config, dismissed_changes=(*self._config.dismissed_changes, *new))
+                )
+            return len(keys)
+
     # --- writing to the record ---
 
     def _author(self, kind: str, agent_name: str | None) -> Author:

@@ -116,3 +116,28 @@ def test_replay_follows_moves_and_keeps_earliest() -> None:
     got = {sha: v.first_seen for sha, v in versions[("r", "new.docx")].items()}
     assert got == {a: T1, b: T2, c: T3}
     assert len(moves) == 1
+
+
+def test_rereading_the_same_bytes_is_not_a_new_version() -> None:
+    """A better extractor gives different text for an unchanged file: not a change."""
+    a, b, c = "a" * 64, "b" * 64, "c" * 64
+    bytes1, bytes2 = "1" * 64, "2" * 64
+    lines = [
+        VersionLine("version", "r", "p.pdf", T1, a, content_sha256=bytes1),
+        VersionLine("version", "r", "p.pdf", T2, b, content_sha256=bytes1),  # new extractor
+        VersionLine("version", "r", "p.pdf", T3, c, content_sha256=bytes2),  # a real edit
+    ]
+    versions, _ = replay(lines)
+    got = {sha: v.first_seen for sha, v in versions[("r", "p.pdf")].items()}
+    assert got == {b: T1, c: T3}
+
+
+def test_old_log_lines_without_content_hash_still_load(snaps: SnapshotStore) -> None:
+    snaps.folder.mkdir(parents=True, exist_ok=True)
+    snaps.log_path.write_text(
+        '{"at": "' + T1 + '", "kind": "version", "path": "a.md", "root_id": "r", '
+        '"source": "scan", "text_sha256": "' + "a" * 64 + '"}\n',
+        encoding="utf-8",
+    )
+    [line] = snaps.read_log()
+    assert line.content_sha256 is None

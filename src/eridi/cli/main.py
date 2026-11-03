@@ -312,6 +312,9 @@ def scan() -> None:
             if report.skipped:
                 parts.append(f"{len(report.skipped)} skipped")
             out.print(f"[bold]{label}[/bold]: {', '.join(parts)}.")
+            if report.seconds >= 10:
+                workers = f" with {report.workers} workers" if report.workers > 1 else ""
+                out.print(f"  Took {format_duration(report.seconds)}{workers}.")
             for path, reason in report.errors:
                 out.print(f"  [yellow]Could not read[/yellow] {escape(path)}: {escape(reason)}")
             if report.slow:
@@ -460,10 +463,19 @@ def outcome(
 
 @app.command()
 def dismiss(
-    file: Annotated[str, typer.Argument(help="The changed file not worth explaining.")],
+    file: Annotated[
+        str | None, typer.Argument(help="The changed file not worth explaining.")
+    ] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Dismiss every waiting change.")] = False,
 ) -> None:
     """Stop asking why a file changed (this change, this computer)."""
     with session() as eridi:
+        if all_:
+            count = eridi.dismiss_all()
+            console().print(f"Dismissed {count} change{'s' if count != 1 else ''}.")
+            return
+        if file is None:
+            raise EridiError("Name a file, or use --all to dismiss every waiting change.")
         info = pick_file(eridi, file)
         pending = eridi.pending_change_for(info)
         if pending is None:

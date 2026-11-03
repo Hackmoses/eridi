@@ -20,6 +20,7 @@ import os
 import pickle
 import sqlite3
 import time
+import warnings
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import PurePosixPath
@@ -77,6 +78,7 @@ class ScanReport:
     unavailable: str | None = None
     """Why the whole root could not be scanned (e.g. a drive that isn't connected)."""
     workers: int = 1
+    seconds: float = 0.0
     slow: list[tuple[str, float]] = field(default_factory=list)
     """(path, seconds) for the slowest files, slowest first."""
 
@@ -157,6 +159,7 @@ def _quiet_worker() -> None:
     root = logging.getLogger()
     root.handlers[:] = [logging.NullHandler()]
     root.setLevel(logging.CRITICAL)
+    warnings.simplefilter("ignore")
 
 
 def _picklable(connector: Connector) -> bool:
@@ -239,6 +242,7 @@ def scan_root(
 ) -> ScanReport:
     settings = settings or Settings()
     report = ScanReport(root.id)
+    started = time.perf_counter()
     now = utc_now()
     with conn:
         upsert_root(conn, root)
@@ -332,6 +336,7 @@ def scan_root(
     report.errors.sort()
     report.skipped.sort()
     report.slow = sorted(report.slow, key=lambda s: -s[1])[:10]
+    report.seconds = time.perf_counter() - started
     return report
 
 
@@ -405,7 +410,8 @@ def _apply(
     old_text = old.text_sha256 if old is not None else None
     if result.text and text_sha != old_text:
         snapshots.put(result.text)
-        snapshots.log_version(root.id, remote.path, text_sha or "", now)
+        snapshots.log_version(root.id, remote.path, text_sha or "", now,
+                              content_sha256=examined.content_sha256)  # fmt: skip
     stored = upsert_file(conn, info, result.text)
 
     if old is None:

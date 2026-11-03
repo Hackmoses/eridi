@@ -43,12 +43,16 @@ class VersionLine:
     text_sha256: str | None = None
     source: str = "scan"
     from_path: str | None = None
+    content_sha256: str | None = None
+    """The file's bytes for this version. Older log lines don't have it."""
 
     def to_json(self) -> str:
         data: dict[str, Any] = {"kind": self.kind, "root_id": self.root_id, "path": self.path}
         data["at"] = self.at
         if self.kind == "version":
             data |= {"text_sha256": self.text_sha256, "source": self.source}
+            if self.content_sha256:
+                data["content_sha256"] = self.content_sha256
         else:
             data["from_path"] = self.from_path
         return json.dumps(data, ensure_ascii=False, sort_keys=True)
@@ -64,6 +68,7 @@ def _parse_line(raw: str) -> VersionLine | None:
             return VersionLine(
                 "version", data["root_id"], data["path"], data["at"],
                 text_sha256=data["text_sha256"], source=data.get("source", "scan"),
+                content_sha256=data.get("content_sha256"),
             )  # fmt: skip
         if kind == "move":
             return VersionLine(
@@ -193,7 +198,13 @@ class SnapshotStore:
             return handle.read(1) == b"\n"
 
     def log_version(
-        self, root_id: str, path: str, text_sha256: str, at: str, source: str = "scan"
+        self,
+        root_id: str,
+        path: str,
+        text_sha256: str,
+        at: str,
+        source: str = "scan",
+        content_sha256: str | None = None,
     ) -> bool:
         """Record that a file had this text. Returns False if that was already logged."""
         if self._logged is None:
@@ -205,7 +216,10 @@ class SnapshotStore:
         key = (root_id, path, text_sha256)
         if key in self._logged:
             return False
-        self._append(VersionLine("version", root_id, path, at, text_sha256, source))
+        self._append(
+            VersionLine("version", root_id, path, at, text_sha256, source,
+                        content_sha256=content_sha256)
+        )  # fmt: skip
         self._logged.add(key)
         return True
 
@@ -228,19 +242,41 @@ def replay(
 
     When the same text is seen under two paths that later merge through a move, the earlier
     `first_seen` wins.
+
+    New text from the same bytes is a re-read by a different (newer) extractor, not a change
+    to the file: it replaces the previous text instead of becoming a new version.
     """
     versions: dict[tuple[str, str], dict[str, ReplayedVersion]] = {}
+    latest: dict[tuple[str, str], tuple[str, str]] = {}  # key → (content sha, text sha)
     moves: list[VersionLine] = []
     for line in lines:
         key = (line.root_id, line.path)
         if line.kind == "version" and line.text_sha256 is not None:
-            merge_version(versions.setdefault(key, {}), line.text_sha256, line.at, line.source)
+            into = versions.setdefault(key, {})
+            first_seen = line.at
+            previous = latest.get(key)
+            if (
+                previous is not None
+                and line.content_sha256 is not None
+                and previous[0] == line.content_sha256
+                and previous[1] != line.text_sha256
+            ):
+                replaced = into.pop(previous[1], None)
+                if replaced is not None:
+                    first_seen = min(first_seen, replaced.first_seen)
+            merge_version(into, line.text_sha256, first_seen, line.source)
+            if line.content_sha256 is not None:
+                latest[key] = (line.content_sha256, line.text_sha256)
+            else:
+                latest.pop(key, None)
         elif line.kind == "move" and line.from_path is not None:
             moves.append(line)
             moved = versions.pop((line.root_id, line.from_path), {})
             target = versions.setdefault(key, {})
             for v in moved.values():
                 merge_version(target, v.text_sha256, v.first_seen, v.source)
+            if (line.root_id, line.from_path) in latest:
+                latest[key] = latest.pop((line.root_id, line.from_path))
     return versions, moves
 
 

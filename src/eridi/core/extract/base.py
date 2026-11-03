@@ -5,6 +5,7 @@ reason, so one bad file never stops a scan. Reasons describe the failure, never 
 file's contents.
 """
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -33,6 +34,8 @@ class ExtractResult:
 
 
 Extractor = Callable[[bytes], ExtractResult]
+
+MAX_TEXT_CHARS = 2_000_000
 
 _REGISTRY: dict[str, Extractor] = {}
 
@@ -73,12 +76,21 @@ def extract(name: str, data: bytes) -> ExtractResult:
     if func is None:
         return ExtractResult("", stem, "name_only")
     try:
-        result = func(data)
+        with warnings.catch_warnings():
+            # Parsers warn about features they skip (e.g. Excel data validation). That's
+            # noise for users, and it scrambles the scan's progress line.
+            warnings.simplefilter("ignore")
+            result = func(data)
     except Exception as exc:
         return ExtractResult("", stem, "error", f"Could not read this file ({_describe(exc)}).")
     text = clean_text(result.text)
+    reason = result.reason
+    if len(text) > MAX_TEXT_CHARS:
+        # Beyond this (a few books' worth), more text adds little to search but a lot of time.
+        text = text[:MAX_TEXT_CHARS]
+        reason = reason or f"Only the first {MAX_TEXT_CHARS:,} characters are indexed."
     title = (result.title or "").strip() or stem
-    return ExtractResult(text, title[:300], result.status, result.reason)
+    return ExtractResult(text, title[:300], result.status, reason)
 
 
 def extract_file(
