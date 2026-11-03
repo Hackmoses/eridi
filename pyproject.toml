@@ -18,8 +18,12 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 dependencies = [
+    "openpyxl>=3.1",      # .xlsx text
     "pathspec>=0.12",     # gitignore-style patterns for .eridiignore
     "platformdirs>=4.2",  # correct per-OS app-data locations
+    "pypdf>=5.0",         # .pdf text (pure Python, no system libraries)
+    "python-docx>=1.1",   # .docx text
+    "python-pptx>=1.0",   # .pptx text
     "python-ulid>=3.0",   # sortable IDs that are unique across devices
     "tomli-w>=1.0",       # writes config.toml (the standard library only reads TOML)
     "typer>=0.12",        # command line
@@ -31,12 +35,11 @@ eridi = "eridi.cli.main:app"
 [dependency-groups]
 dev = [
     "mypy>=1.11",
-    "openpyxl>=3.1",      # builds the sample lab fixture (runtime dependency from M2)
     "pre-commit>=3.8",
     "pytest>=8.3",
     "pytest-cov>=5.0",
-    "python-docx>=1.1",   # builds the sample lab fixture (runtime dependency from M2)
     "ruff>=0.17",
+    "types-openpyxl>=3.1",
 ]
 
 [build-system]
