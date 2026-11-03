@@ -75,7 +75,31 @@ nav a[aria-current="page"] { color: var(--fg); border-bottom: 2px solid var(--ac
 }
 .scan { margin-left: auto; display: flex; align-items: center; gap: .75rem; color: var(--muted); font-size: .9rem; }
 
-main { max-width: 52rem; margin: 0 auto; padding: 1.25rem; }
+main { max-width: 52rem; margin: 0 auto; padding: 1.25rem; min-width: 0; width: 100%; }
+
+.layout { display: grid; grid-template-columns: 14rem minmax(0, 1fr); align-items: start; }
+.sidebar { padding: 1.25rem 1rem; border-right: 1px solid var(--line); min-height: calc(100vh - 3.5rem); }
+.sidebar h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.sidebar ul { list-style: none; margin: .5rem 0 1rem; padding: 0; }
+.sidebar li a { display: block; padding: .3rem .5rem; border-radius: var(--radius); text-decoration: none;
+  color: var(--fg); word-break: break-word; }
+.sidebar li a[aria-current="page"] { background: var(--card); font-weight: 600; }
+.new-project { display: flex; gap: .4rem; }
+.new-project input { flex: 1; min-width: 0; }
+@media (max-width: 56rem) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { min-height: 0; border-right: 0; border-bottom: 1px solid var(--line); padding: .75rem 1.25rem; }
+  .sidebar ul { display: flex; flex-wrap: wrap; gap: .25rem .5rem; margin: .25rem 0 .5rem; }
+}
+.folders { list-style: none; padding: 0; margin: 0 0 .5rem; }
+.folders li { display: flex; gap: .75rem; align-items: baseline; justify-content: space-between;
+  padding: .3rem 0; border-bottom: 1px solid var(--line); word-break: break-word; }
+.inline-form { display: flex; gap: .5rem; flex-wrap: wrap; margin: .5rem 0 1rem; }
+.inline-form input { flex: 1; min-width: 10rem; }
+.filelist { list-style: none; padding: 0; margin: 0; }
+.filelist li { padding: .3rem 0; border-bottom: 1px solid var(--line); word-break: break-word; }
+section { margin: 1.5rem 0; }
+.heading { display: flex; align-items: baseline; gap: 1rem; }
 h1 { font-size: 1.35rem; margin: .25rem 0 1rem; word-break: break-word; }
 h2 { font-size: 1.05rem; margin: 0 0 .25rem; word-break: break-word; }
 
@@ -91,7 +115,7 @@ button {
 button.secondary { background: transparent; color: var(--accent); }
 button.link { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
 button:disabled { opacity: .5; cursor: default; }
-input[type="search"], textarea, select {
+input[type="search"], input:not([type]), textarea, select {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--bg);

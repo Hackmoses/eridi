@@ -11,7 +11,7 @@ from eridi.api.security import Guard
 from eridi.core.changes import Activity, FileDiff, PendingChange
 from eridi.core.config import ConfigError
 from eridi.core.index.search import SearchHit, group_label
-from eridi.core.models import Entry, FileInfo, Root
+from eridi.core.models import Entry, FileInfo, Project, Root
 from eridi.core.record.store import RecordFolderError
 from eridi.core.service import (
     AmbiguousFileError,
@@ -19,6 +19,7 @@ from eridi.core.service import (
     EridiError,
     FileNotFoundInIndexError,
     UnknownEntryError,
+    UnknownProjectError,
     file_id,
 )
 
@@ -41,7 +42,11 @@ def error(exc: Exception) -> JSONResponse:
             {"error": str(exc), "candidates": [file_json(f) for f in exc.candidates[:20]]},
             status_code=409,
         )
-    status = 404 if isinstance(exc, FileNotFoundInIndexError | UnknownEntryError) else 400
+    status = (
+        404
+        if isinstance(exc, FileNotFoundInIndexError | UnknownEntryError | UnknownProjectError)
+        else 400
+    )
     return JSONResponse({"error": str(exc)}, status_code=status)
 
 
@@ -86,6 +91,8 @@ def entry_json(eridi: Eridi, e: Entry, state: str | None = None) -> dict[str, An
         "target_id": e.target_id,
         "supersedes": e.supersedes,
         "state": state or eridi.entry_state(e.id) or "current",
+        "project_id": e.project_id,
+        "project_name": e.project.name if e.project else None,
     }
 
 
@@ -142,6 +149,24 @@ def root_json(r: Root) -> dict[str, Any]:
             "search": r.search, "save": r.save}  # fmt: skip
 
 
+def project_json(eridi: Eridi, p: Project) -> dict[str, Any]:
+    return {
+        "id": p.id,
+        "name": p.name,
+        "home_storage_id": p.home_root_id,
+        "home_storage": eridi.root_label(p.home_root_id) if p.home_root_id else None,
+        "folders": [
+            {
+                "ref": f"{f.root_id}:{f.path}",
+                "storage_id": f.root_id,
+                "storage": eridi.root_label(f.root_id),
+                "path": f.path,
+            }
+            for f in p.folders
+        ],
+    }
+
+
 # --- request bodies ---
 
 
@@ -150,6 +175,7 @@ class NoteIn(BaseModel):
     file: str | None = None
     outcome: str | None = None
     tags: list[str] = Field(default_factory=list, max_length=20)
+    project: str | None = None
 
 
 class OutcomeIn(BaseModel):
@@ -161,6 +187,22 @@ class OutcomeIn(BaseModel):
 
 class DismissIn(BaseModel):
     key: str = Field(min_length=1, max_length=200)
+
+
+class ProjectIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    home_storage_id: str | None = None
+    folders: list[str] = Field(default_factory=list, max_length=50)
+
+
+class ProjectUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    home_storage_id: str | None = None
+
+
+class FolderIn(BaseModel):
+    folder: str = Field(min_length=1, max_length=2000)
+    """A folder path, a storage name (all of it), or `<storage ID>:<folder>`."""
 
 
 class StorageIn(BaseModel):
@@ -195,18 +237,19 @@ def status(request: Request) -> dict[str, Any]:
 
 
 @router.get("/search")
-def search(request: Request, q: str = "", limit: int = 30) -> Any:
+def search(request: Request, q: str = "", limit: int = 30, project: str | None = None) -> Any:
     try:
-        hits = _eridi(request).search(q, max(1, min(limit, 100)))
+        hits = _eridi(request).search(q, max(1, min(limit, 100)), project or None)
     except KNOWN_ERRORS as exc:
         return error(exc)
     return {"query": q, "results": [hit_json(h) for h in hits]}
 
 
 @router.get("/changes")
-def changes(request: Request) -> Any:
+def changes(request: Request, project: str | None = None) -> Any:
     try:
-        return {"changes": [change_json(c) for c in _eridi(request).pending_changes()]}
+        pending = _eridi(request).pending_changes(project or None)
+        return {"changes": [change_json(c) for c in pending]}
     except KNOWN_ERRORS as exc:
         return error(exc)
 
@@ -235,7 +278,7 @@ def add_note(request: Request, body: NoteIn) -> Any:
     eridi = _eridi(request)
     try:
         entry = eridi.add_note(body.text, file=body.file, outcome=body.outcome or None,
-                               tags=body.tags)  # fmt: skip
+                               tags=body.tags, project=body.project or None)  # fmt: skip
     except KNOWN_ERRORS as exc:
         return error(exc)
     return JSONResponse(entry_json(eridi, entry), status_code=201)
@@ -306,10 +349,10 @@ def history(request: Request, file: str) -> Any:
 
 
 @router.get("/recent")
-def recent(request: Request, limit: int = 20) -> Any:
+def recent(request: Request, limit: int = 20, project: str | None = None) -> Any:
     eridi = _eridi(request)
     try:
-        entries = eridi.recent(max(1, min(limit, 200)))
+        entries = eridi.recent(max(1, min(limit, 200)), project=project or None)
     except KNOWN_ERRORS as exc:
         return error(exc)
     return {"entries": [entry_json(eridi, e, "current") for e in entries]}
@@ -336,6 +379,74 @@ def update_storage(request: Request, root_id: str, body: StorageIn) -> Any:
     except KNOWN_ERRORS as exc:
         return error(exc)
     return root_json(root)
+
+
+@router.get("/projects")
+def projects(request: Request) -> Any:
+    eridi = _eridi(request)
+    try:
+        return {"projects": [project_json(eridi, p) for p in eridi.list_projects()]}
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+
+
+@router.post("/projects")
+def create_project(request: Request, body: ProjectIn) -> Any:
+    eridi = _eridi(request)
+    try:
+        p = eridi.create_project(body.name, home_root_id=body.home_storage_id, folders=body.folders)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return JSONResponse(project_json(eridi, p), status_code=201)
+
+
+@router.get("/projects/{project_id}")
+def project(request: Request, project_id: str, limit: int = 100) -> Any:
+    """A project page: files from all storage, changes needing a why, record timeline."""
+    eridi = _eridi(request)
+    try:
+        o = eridi.project_overview(project_id, max(1, min(limit, 500)))
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return {
+        **project_json(eridi, o.project),
+        "files": [file_json(f, eridi.root_label(f.root_id)) for f in o.files[:500]],
+        "file_count": len(o.files),
+        "changes": [change_json(c) for c in o.pending],
+        "entries": [entry_json(eridi, e, "current") for e in o.entries],
+    }
+
+
+@router.patch("/projects/{project_id}")
+def update_project(request: Request, project_id: str, body: ProjectUpdateIn) -> Any:
+    eridi = _eridi(request)
+    try:
+        p = eridi.get_project(project_id)
+        if body.name is not None and body.name != p.name:
+            p = eridi.rename_project(p.id, body.name)
+        if "home_storage_id" in body.model_fields_set and body.home_storage_id != p.home_root_id:
+            p = eridi.set_project_home(p.id, body.home_storage_id)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return project_json(eridi, p)
+
+
+@router.post("/projects/{project_id}/folders")
+def add_project_folder(request: Request, project_id: str, body: FolderIn) -> Any:
+    eridi = _eridi(request)
+    try:
+        return project_json(eridi, eridi.add_project_folder(project_id, body.folder))
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+
+
+@router.post("/projects/{project_id}/folders/remove")
+def remove_project_folder(request: Request, project_id: str, body: FolderIn) -> Any:
+    eridi = _eridi(request)
+    try:
+        return project_json(eridi, eridi.remove_project_folder(project_id, body.folder))
+    except KNOWN_ERRORS as exc:
+        return error(exc)
 
 
 @router.post("/scan")

@@ -23,6 +23,18 @@
       <button type="button" id="scan-now">Scan now</button>
     </div>
   </header>
-  <main id="main" tabindex="-1"></main>
+  <div class="layout">
+    <aside class="sidebar" aria-labelledby="projects-heading">
+      <h2 id="projects-heading">Projects</h2>
+      <ul id="project-list"></ul>
+      <form id="new-project" class="new-project">
+        <label for="new-project-name" class="visually-hidden">New project</label>
+        <input id="new-project-name" name="name" placeholder="New project" autocomplete="off" required>
+        <button type="submit" class="secondary">Add</button>
+      </form>
+      <p id="new-project-error" class="error" role="alert" hidden></p>
+    </aside>
+    <main id="main" tabindex="-1"></main>
+  </div>
 </body>
 </html>

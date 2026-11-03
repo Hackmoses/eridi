@@ -24,7 +24,7 @@ from eridi.core.changes import Activity, FileDiff, FileStats
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit, group_label, parse_query
-from eridi.core.models import OUTCOMES, Entry, FileInfo, parse_timestamp
+from eridi.core.models import OUTCOMES, Entry, FileInfo, Project, parse_timestamp
 from eridi.core.record.store import RecordFolderError
 from eridi.core.scan import ScanProgress, ScanReport
 from eridi.core.service import (
@@ -44,6 +44,9 @@ app = typer.Typer(
 )
 storage_app = typer.Typer(help="Connect and list storage folders.", no_args_is_help=True)
 index_app = typer.Typer(help="Maintain the search index.", no_args_is_help=True)
+project_app = typer.Typer(
+    help="Organize files and notes by project, across storage.", no_args_is_help=True
+)
 mcp_app = typer.Typer(
     help="Let AI assistants (Claude and other MCP clients) use the record. "
     "With no subcommand, runs the MCP server over stdio.",
@@ -51,6 +54,7 @@ mcp_app = typer.Typer(
 )
 app.add_typer(storage_app, name="storage")
 app.add_typer(index_app, name="index")
+app.add_typer(project_app, name="project")
 app.add_typer(mcp_app, name="mcp")
 
 OUTCOME_HELP = f"Did it work? One of: {', '.join(OUTCOMES)}."
@@ -191,7 +195,8 @@ def highlighted(hit: SearchHit) -> Text:
 def describe_entry(eridi: Eridi, entry: Entry) -> str:
     who = entry.author.name + (" · AI" if entry.author.kind == "agent" else "")
     files = ", ".join(s.path for s in entry.subjects)
-    parts = [when(entry.created_at), entry.kind, who]
+    kind = f"project {entry.project.name!r}" if entry.project else entry.kind
+    parts = [when(entry.created_at), kind, who]
     if entry.outcome:
         parts.append(f"outcome: {entry.outcome}")
     if files:
@@ -315,11 +320,133 @@ def storage_remove(
 ) -> None:
     """Disconnect storage. Its files and the record are not touched."""
     with session() as eridi:
-        matches = [r for r in eridi.list_roots() if storage in (r.id, r.label)]
-        if len(matches) != 1:
-            raise EridiError(f"No single storage is called {storage!r}. See `eridi storage list`.")
-        eridi.remove_root(matches[0].id)
-        console().print(f"Removed {escape(matches[0].label)}.")
+        root_id = storage_id(eridi, storage)
+        label = eridi.root_label(root_id)
+        eridi.remove_root(root_id)
+        console().print(f"Removed {escape(label or root_id)}.")
+
+
+def folder_label(eridi: Eridi, root_id: str, path: str) -> str:
+    label = eridi.root_label(root_id) or root_id
+    return f"{label} / {path}" if path else f"{label} (all of it)"
+
+
+def print_project(eridi: Eridi, project: Project) -> None:
+    out = console()
+    out.print(f"[bold]{escape(project.name)}[/bold]  [dim]{project.id}[/dim]")
+    for f in project.folders:
+        out.print(f"  {escape(folder_label(eridi, f.root_id, f.path))}")
+    if not project.folders:
+        out.print("  [dim]No folders yet: eridi project add-folder <project> <folder>[/dim]")
+    if project.home_root_id:
+        home = eridi.root_label(project.home_root_id) or project.home_root_id
+        out.print(f"  [dim]Saves to {escape(home)}[/dim]")
+
+
+FOLDER_HELP = "A folder path, a storage name (all of it), or <storage ID>:<folder>."
+
+
+@project_app.command("new")
+def project_new(
+    name: Annotated[str, typer.Argument(help='e.g. "Antibody validation".')],
+    folder: Annotated[
+        list[str] | None, typer.Option(help=FOLDER_HELP + " Repeat for more.")
+    ] = None,
+    home: Annotated[
+        str | None, typer.Option(help="Storage name or ID that new files are saved to.")
+    ] = None,
+) -> None:
+    """Start a project."""
+    with session() as eridi:
+        home_id = storage_id(eridi, home) if home else None
+        project = eridi.create_project(name, home_root_id=home_id, folders=folder or ())
+        print_project(eridi, project)
+
+
+@project_app.command("list")
+def project_list() -> None:
+    """Show all projects."""
+    with session() as eridi:
+        projects = eridi.list_projects()
+        if not projects:
+            console().print('No projects yet. Start one with: eridi project new "<name>"')
+            return
+        for project in projects:
+            print_project(eridi, project)
+
+
+@project_app.command("add-folder")
+def project_add_folder(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    folder: Annotated[str, typer.Argument(help=FOLDER_HELP)],
+) -> None:
+    """Add a folder; its files and notes about them join the project."""
+    with session() as eridi:
+        print_project(eridi, eridi.add_project_folder(project, folder))
+
+
+@project_app.command("remove-folder")
+def project_remove_folder(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    folder: Annotated[str, typer.Argument(help=FOLDER_HELP)],
+) -> None:
+    """Take a folder out of a project. Nothing in the folder is touched."""
+    with session() as eridi:
+        print_project(eridi, eridi.remove_project_folder(project, folder))
+
+
+@project_app.command("rename")
+def project_rename(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    name: Annotated[str, typer.Argument(help="The new name.")],
+) -> None:
+    """Rename a project (the old name stays in its history)."""
+    with session() as eridi:
+        print_project(eridi, eridi.rename_project(project, name))
+
+
+@project_app.command("home")
+def project_home(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    storage: Annotated[str, typer.Argument(help="Storage name or ID.")],
+) -> None:
+    """Set the storage new files for this project are saved to."""
+    with session() as eridi:
+        print_project(eridi, eridi.set_project_home(project, storage_id(eridi, storage)))
+
+
+@project_app.command("show")
+def project_show(
+    project: Annotated[str, typer.Argument(help="The project's name or ID.")],
+    limit: Annotated[int, typer.Option(min=1, max=500, help="Files and entries to show.")] = 20,
+) -> None:
+    """A project's files from all storage, changes needing a why, and its record."""
+    with session() as eridi:
+        overview = eridi.project_overview(project, limit)
+        print_project(eridi, overview.project)
+        out = console()
+        out.print(f"[bold]Files[/bold] ({len(overview.files)})")
+        for f in overview.files[:limit]:
+            out.print(f"  {escape(f.path)}  [dim]{escape(eridi.root_label(f.root_id) or '')}[/dim]")
+        if len(overview.files) > limit:
+            out.print(f"  [dim]… and {len(overview.files) - limit} more[/dim]")
+        if overview.pending:
+            out.print(f"[bold]Needs a why[/bold] ({len(overview.pending)})")
+            for change in overview.pending:
+                summary = change.summary or "(text changed)"
+                out.print(f"  {escape(change.path)}  [dim]{escape(summary)}[/dim]")
+        out.print("[bold]Record[/bold]")
+        for entry in overview.entries:
+            out.print(f"  [dim]{escape(describe_entry(eridi, entry))} · {entry.id}[/dim]")
+            if entry.text:
+                out.print(f"    {escape(entry.text)}")
+
+
+def storage_id(eridi: Eridi, ref: str) -> str:
+    matches = [r for r in eridi.list_roots() if ref in (r.id, r.label)]
+    if len(matches) != 1:
+        raise EridiError(f"No single storage is called {ref!r}. See `eridi storage list`.")
+    return matches[0].id
 
 
 @app.command()

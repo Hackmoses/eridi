@@ -110,3 +110,36 @@ def test_activity_updates_live_after_a_save(
             assert "Needs a why" in text
             page.get_by_role("button", name="Diff").click()
             page.wait_for_selector(".diff .add")
+
+
+def test_project_sidebar_and_page(browser: Any, sample_lab: SampleLab, tmp_path: Path) -> None:
+    """M8.2: create a project in the sidebar, add a folder, see its files, search inside it."""
+    with Eridi() as eridi:
+        eridi.init("A. Okafor", None, tmp_path / "record")
+        eridi.add_root(sample_lab.root, "Lab Drive")
+        eridi.scan()
+        with live_server(eridi) as (port, guard):
+            page = browser.new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(f"http://127.0.0.1:{port}/?t={guard.new_link()}")
+            page.get_by_placeholder("New project").fill("Western blots")
+            page.get_by_role("button", name="Add", exact=True).click()
+            page.wait_for_selector("h1:has-text('Western blots')")
+            page.wait_for_selector("#project-list a[aria-current='page']:has-text('Western blots')")
+            page.get_by_label("Folder to add").fill(str(sample_lab.root / "Protocols"))
+            page.get_by_role("button", name="Add folder").click()
+            page.wait_for_selector(f".filelist >> text={PROTOCOL}")
+            assert "Lab Drive / Protocols" in page.inner_text(".folders")
+            assert "lab_meeting" not in page.inner_text(".filelist")
+
+            page.get_by_label("Search this project").fill("antibody")
+            page.get_by_label("Search this project").press("Enter")
+            page.wait_for_selector(".result")
+            assert "Western_blot_blocking_v7" in page.inner_text(".results")
+            assert "Antibody_lot_log" not in page.inner_text(".results")
+
+            page.get_by_label("Add a note").fill("Plan: validate the new lot first.")
+            page.get_by_role("button", name="Save").click()
+            page.wait_for_selector(".timeline >> text=Plan: validate the new lot first.")
+            assert errors == []

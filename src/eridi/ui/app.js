@@ -342,6 +342,124 @@ async function renderStorage() {
   } catch (error) { showError(list, error); }
 }
 
+// --- projects ---
+
+const projectList = document.getElementById("project-list");
+let currentProject = null;
+
+async function refreshProjects() {
+  try {
+    const data = await api("/projects");
+    projectList.replaceChildren(...data.projects.map((p) =>
+      el("li", {}, el("a", { href: "#/project?id=" + encodeURIComponent(p.id),
+        "aria-current": p.id === currentProject ? "page" : null }, p.name))));
+  } catch (error) { projectList.replaceChildren(); }
+}
+
+document.getElementById("new-project").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const input = document.getElementById("new-project-name");
+  const message = document.getElementById("new-project-error");
+  try {
+    const p = await api("/projects", { body: { name: input.value } });
+    input.value = "";
+    message.hidden = true;
+    location.hash = "#/project?id=" + encodeURIComponent(p.id);
+    refreshProjects();
+  } catch (error) { message.hidden = false; message.textContent = error.message; }
+});
+
+async function renderProject(params) {
+  const id = params.get("id");
+  main.replaceChildren();
+  if (!id) { main.append(el("p", { class: "muted" }, "Choose a project.")); return; }
+  const base = "/projects/" + encodeURIComponent(id);
+  let p;
+  try { p = await api(base); } catch (error) { showError(main, error); return; }
+
+  const message = el("p", { class: "error", role: "alert", hidden: true });
+  const fail = (error) => { message.hidden = false; message.textContent = error.message; };
+  const again = () => { renderProject(params); refreshProjects(); };
+
+  const name = el("input", { id: "project-name", value: p.name, required: true, "aria-label": "Project name" });
+  const renameForm = el("form", { class: "inline-form", hidden: true, onsubmit: async (e) => {
+    e.preventDefault();
+    try { await api(base, { method: "PATCH", body: { name: name.value } }); again(); } catch (error) { fail(error); }
+  } }, name, el("button", { type: "submit" }, "Rename"));
+  const heading = el("div", { class: "heading" }, el("h1", {}, p.name),
+    el("button", { type: "button", class: "link", onclick: () => {
+      heading.hidden = true; renameForm.hidden = false; name.focus(); name.select();
+    } }, "Rename"));
+
+  const folder = el("input", { id: "add-folder", required: true, "aria-label": "Folder to add",
+    placeholder: "Folder path, or storage name" });
+  const folders = el("section", { "aria-labelledby": "folders-h" },
+    el("h2", { id: "folders-h" }, "Folders"),
+    el("ul", { class: "folders" }, p.folders.map((f) => el("li", {},
+      el("span", {}, (f.storage || f.storage_id) + (f.path ? " / " + f.path : "")),
+      el("button", { type: "button", class: "link", onclick: async () => {
+        try { await api(base + "/folders/remove", { body: { folder: f.ref } }); again(); } catch (error) { fail(error); }
+      } }, "Remove")))),
+    el("form", { class: "inline-form", onsubmit: async (e) => {
+      e.preventDefault();
+      try { await api(base + "/folders", { body: { folder: folder.value } }); again(); } catch (error) { fail(error); }
+    } }, folder, el("button", { type: "submit" }, "Add folder")));
+
+  const query = el("input", { type: "search", id: "project-q", "aria-label": "Search this project",
+    placeholder: "Search " + p.name });
+  const results = el("div", { "aria-live": "polite" });
+  const search = el("form", { class: "searchbox", role: "search", onsubmit: async (e) => {
+    e.preventDefault();
+    const q = query.value.trim();
+    if (!q) { results.replaceChildren(); return; }
+    try {
+      const data = await api("/search?q=" + encodeURIComponent(q) + "&project=" + encodeURIComponent(p.id));
+      results.replaceChildren(data.results.length ? el("ul", { class: "results" }, data.results.map((r) => {
+        const isFile = r.type === "file";
+        return el("li", { class: "result " + r.type },
+          el("div", { class: "title" }, el("span", { class: "tag" }, isFile ? "File" : "Note"),
+            r.file_id ? historyLink(r.file_id, r.title) : el("span", {}, r.title)),
+          el("div", { class: "meta" }, [r.storage, r.path].filter(Boolean).join(" · ")),
+          snippet(r.snippet));
+      })) : el("p", { class: "muted" }, "Nothing found."));
+    } catch (error) { showError(results, error); }
+  } }, query, el("button", { type: "submit" }, "Search"));
+
+  const note = el("textarea", { id: "project-note", rows: 3, required: true });
+  const outcome = outcomeSelect("project-note-outcome");
+  const noteForm = el("form", { class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    if (!note.value.trim()) { note.focus(); return; }
+    try {
+      await api("/notes", { body: { text: note.value, project: p.id, outcome: outcome.value || null } });
+      again();
+    } catch (error) { fail(error); }
+  } },
+    el("label", { for: "project-note" }, "Add a note"), note,
+    el("div", { class: "actions" },
+      el("label", { for: "project-note-outcome", class: "visually-hidden" }, "Outcome"), outcome,
+      el("button", { type: "submit" }, "Save")));
+
+  const changes = p.changes.length ? el("section", { "aria-labelledby": "changes-h" },
+    el("h2", { id: "changes-h" }, "Needs a why"),
+    p.changes.map((c, i) => changeCard(c, "p" + i))) : null;
+
+  const files = el("section", { "aria-labelledby": "files-h" },
+    el("h2", { id: "files-h" }, `Files (${p.file_count})`),
+    p.file_count ? el("ul", { class: "filelist" }, p.files.map((f) => el("li", {},
+      historyLink(f.id, f.path), el("span", { class: "muted" }, f.storage ? " · " + f.storage : ""))))
+      : el("p", { class: "muted" }, p.folders.length ? "No files found yet. Try Scan now." : "Add a folder to see its files."));
+
+  const timeline = el("section", { "aria-labelledby": "record-h" },
+    el("h2", { id: "record-h" }, "Record"),
+    el("ol", { class: "timeline" }, p.entries.map((e) => el("li", {},
+      e.kind === "project" ? el("p", { class: "muted" }, `Project "${e.project_name}" · ${e.author} · ${when(e.created_at)}`)
+        : entryCard(e, null)))));
+
+  main.append(...[heading, renameForm, message, search, results, changes, folders, files, noteForm, timeline]
+    .filter(Boolean));
+}
+
 // --- status and scanning ---
 
 const scanButton = document.getElementById("scan-now");
@@ -401,6 +519,8 @@ function route() {
   const [path, query] = hash.slice(1).split("?");
   const params = new URLSearchParams(query || "");
   const name = path.replace(/^\//, "") || "search";
+  currentProject = name === "project" ? params.get("id") : null;
+  refreshProjects();
   document.querySelectorAll("[data-nav]").forEach((a) => {
     if (a.dataset.nav === name) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -409,6 +529,7 @@ function route() {
   else if (name === "activity") renderActivity();
   else if (name === "history") renderHistory(params);
   else if (name === "storage") renderStorage();
+  else if (name === "project") renderProject(params);
   else renderSearch(params);
 }
 
