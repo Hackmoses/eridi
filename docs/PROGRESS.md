@@ -7,7 +7,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - [ ] **M0 Foundations**: [x] 1 scaffold · [x] 2 tooling · [x] 3 CI · [x] 4 open-source files · [x] 5 core helpers · [x] 6 fixture builder · [ ] Human check: CI green on GitHub; tests pass on your Mac and a Windows machine
 - [ ] **M1 Record store**: [x] 1 schema · [x] 2 store · [x] 3 concurrency · [x] 4 views · [x] 5 config · [ ] Human check: record folder in a real sync folder, two computers
 - [ ] **M2 Local connector and extraction**: [x] 1 protocol · [x] 2 local connector · [x] 3 extractors · [ ] Human check: list a real lab folder, check titles and statuses
-- [ ] **M3 Index and search**: [ ] 1 db · [ ] 2 files · [ ] 3 records · [ ] 4 search · [ ] 5 rebuild
+- [ ] **M3 Index and search**: [x] 1 db · [ ] 2 files · [ ] 3 records · [ ] 4 search · [ ] 5 rebuild
 - [ ] **M4 Scanning, snapshots, changes**: [ ] 1 snapshots · [ ] 2 scanner · [ ] 3 changes/diffs · [ ] 4 service
 - [ ] **M5 CLI**: [ ] 1 commands · [ ] 2 interactive why · [ ] 3 file arguments · [ ] Human check: one week of real use
 - [ ] **M6 MCP server**: [ ] 1 tools · [ ] 2 write gate · [ ] 3 command · [ ] 4 docs · [ ] Human check
@@ -39,3 +39,4 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - 2026-11-03 M1.5: default size limit is 25 MB (so the plan's 50 MB file is skipped). Added a `Root` model to `core/models.py`; config keeps unknown keys when saving.
 - 2026-11-03 M2.2: folder links are never followed (even inside the root, to avoid loops and duplicates); file links are followed only when they resolve inside the root. `.eridiignore` is read from the root folder only. `changes_since` for local folders reports files modified after the cursor time; removals come from comparing listings in the scanner.
 - 2026-11-03 M2.3: added status `name_only` (unknown types) and `too_large` alongside `ok`/`needs_ocr`/`cloud_document`/`error`. Default size limit 25 MB. Also reads `.docm`, `.xlsm`, `.pptm`, `.tsv`, `.markdown` and pptx speaker notes.
+- 2026-11-03 M3.1: index schema adds `files.title`, `files.extract_status` and `entries.state` (current/superseded/retracted) to the ARCHITECTURE.md tables; file IDs are integers internal to the index. A damaged index file is deleted and recreated.
