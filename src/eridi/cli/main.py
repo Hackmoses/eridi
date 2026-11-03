@@ -702,7 +702,11 @@ def storage_id(eridi: Eridi, ref: str) -> str:
 
 
 @app.command()
-def scan() -> None:
+def scan(
+    details: Annotated[
+        bool, typer.Option(help="Always show the time taken and the number of workers.")
+    ] = False,
+) -> None:
     """Look for new and changed files in all storage with search on."""
     with session() as eridi:
         if not eridi.list_roots():
@@ -729,7 +733,7 @@ def scan() -> None:
             if report.skipped:
                 parts.append(f"{len(report.skipped)} skipped")
             out.print(f"[bold]{label}[/bold]: {', '.join(parts)}.")
-            if report.seconds >= 10:
+            if report.seconds >= 10 or details:
                 workers = f" with {report.workers} workers" if report.workers > 1 else ""
                 out.print(f"  Took {format_duration(report.seconds)}{workers}.")
             for path, reason in report.errors:
@@ -1440,6 +1444,20 @@ def open_command(
 
     with session() as eridi:
         serve(eridi, open_browser=browser, announce=lambda m: console().print(m, markup=False))
+
+
+@app.command(hidden=True)
+def serve(
+    sidecar: Annotated[
+        bool, typer.Option(help="Run under the desktop app: JSON lines on stdin/stdout.")
+    ] = False,
+) -> None:
+    """Run the local app server without opening a browser (used by the desktop app)."""
+    with session() as eridi:
+        from eridi.api.app import serve as run
+
+        run(eridi, open_browser=False, sidecar=sidecar,
+            announce=lambda m: err_console().print(m, markup=False))  # fmt: skip
 
 
 def raise_error(message: str) -> NoReturn:

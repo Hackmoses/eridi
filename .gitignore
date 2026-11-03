@@ -11,3 +11,8 @@ build/
 *.egg-info/
 .DS_Store
 Thumbs.db
+
+# desktop app build outputs
+desktop/src-tauri/binaries/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/

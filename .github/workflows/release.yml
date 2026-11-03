@@ -1,0 +1,46 @@
+name: Release
+
+# Tag vX.Y.Z to build, sign and publish installers. "Run workflow" builds them without
+# publishing (unsigned unless the signing secrets are set), to try a build.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    name: Engine · ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-13, target: x86_64-apple-darwin }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu }
+    env:
+      ERIDI_TARGET_TRIPLE: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked
+      - name: Build the engine (PyInstaller, one file)
+        run: uv run python scripts/build_engine.py
+      - name: Smoke test the packaged engine
+        shell: bash
+        run: |
+          suffix=""; [ "$RUNNER_OS" = "Windows" ] && suffix=".exe"
+          uv run python scripts/smoke_engine.py "desktop/src-tauri/binaries/eridi-engine-${{ matrix.target }}${suffix}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: desktop/src-tauri/binaries/
+          if-no-files-found: error

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import socket
+import sys
 import threading
 import webbrowser
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -17,6 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
+from eridi import __version__
 from eridi.api.google import GoogleSignIn
 from eridi.api.microsoft import MicrosoftSignIn
 from eridi.api.routes import router
@@ -29,6 +31,7 @@ from eridi.core.watch import Watcher
 log = logging.getLogger(__name__)
 
 SERVER_FILE = "server.json"
+HEALTH_PATH = "/api/health"
 UI_FILES = {"app.js": "text/javascript", "app.css": "text/css"}
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
@@ -82,6 +85,11 @@ def create_app(
     ) -> Response:
         if not guard.host_ok(request.headers.get("host")):
             return PlainTextResponse("Unexpected Host header.", status_code=400)
+        if request.url.path == HEALTH_PATH and request.method == "GET":
+            # No token needed: says only that this is Eridi and which version. Used by the
+            # desktop app and by release smoke tests.
+            return JSONResponse({"ok": True, "app": "eridi", "version": __version__},
+                                headers={"Cache-Control": "no-store"})  # fmt: skip
         if not guard.origin_ok(
             request.headers.get("origin"), request.headers.get("sec-fetch-site")
         ):
@@ -137,29 +145,74 @@ def free_socket() -> socket.socket:
 
 
 def serve(
-    eridi: Eridi, *, open_browser: bool = True, announce: Callable[[str], None] = print
+    eridi: Eridi,
+    *,
+    open_browser: bool = True,
+    announce: Callable[[str], None] = print,
+    sidecar: bool = False,
 ) -> None:
-    """Run the app until interrupted. Writes `<app-data>/server.json` while running."""
+    """Run the app until interrupted. Writes `<app-data>/server.json` while running.
+
+    `sidecar=True` is for the desktop app, which starts the engine and talks to it over
+    stdin and stdout, one JSON object per line:
+    - when ready, the engine prints `{"event": "ready", "port", "url", "version"}`, where
+      `url` is a one-time sign-in link for the app's window;
+    - the app writes `link` to get `{"event": "link", "url"}` (for a new window), or `scan`
+      to scan now;
+    - when the app closes stdin (it quit, or crashed), the engine stops.
+    """
     import uvicorn
 
     sock = free_socket()
     port = sock.getsockname()[1]
+    scanner = BackgroundScanner(eridi, eridi.config.settings.scan_interval_minutes)
+    server: uvicorn.Server | None = None
 
     def ready(guard: Guard) -> None:
         url = f"http://127.0.0.1:{port}/?t={guard.new_link()}"
         server_file().write_text(
             json.dumps({"port": port, "pid": os.getpid()}) + "\n", encoding="utf-8"
         )
+        if sidecar:
+            _emit({"event": "ready", "port": port, "url": url, "version": __version__})
+            threading.Thread(target=_sidecar_commands, args=(guard, port, scanner, stop),
+                             name="eridi-sidecar", daemon=True).start()  # fmt: skip
+            return
         announce(f"Eridi is running at http://127.0.0.1:{port} (Ctrl+C to stop).")
         if open_browser:
             threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
         else:
             announce(f"Open: {url}")
 
-    app = create_app(eridi, token=get_or_create_token(), port=port, on_ready=ready)
+    def stop() -> None:
+        if server is not None:
+            server.should_exit = True
+
+    app = create_app(eridi, token=get_or_create_token(), port=port, scanner=scanner, on_ready=ready)
     config = uvicorn.Config(app, log_level="warning", access_log=False, lifespan="on")
+    server = uvicorn.Server(config)
     try:
-        uvicorn.Server(config).run(sockets=[sock])
+        server.run(sockets=[sock])
     finally:
         sock.close()
         server_file().unlink(missing_ok=True)
+
+
+def _emit(message: dict[str, object]) -> None:
+    sys.stdout.write(json.dumps(message) + "\n")
+    sys.stdout.flush()
+
+
+def _sidecar_commands(
+    guard: Guard, port: int, scanner: BackgroundScanner, stop: Callable[[], None]
+) -> None:
+    """Answer the desktop app's commands on stdin; stop when it closes stdin."""
+    for line in sys.stdin:
+        command = line.strip()
+        if command == "link":
+            _emit({"event": "link", "url": f"http://127.0.0.1:{port}/?t={guard.new_link()}"})
+        elif command == "scan":
+            _emit({"event": "scan", "started": scanner.request()})
+        elif command == "quit":
+            break
+    stop()
