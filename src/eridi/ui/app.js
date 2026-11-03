@@ -395,6 +395,20 @@ function microsoftPanel() {
   return box;
 }
 
+function folderPanel() {
+  const path = el("input", { id: "folder-path", required: true, placeholder: "/Users/you/OneDrive - University/Lab",
+    "aria-label": "Folder path" });
+  const message = el("p", { class: "error", role: "alert", hidden: true });
+  return el("section", { class: "card", "aria-labelledby": "folder-h" },
+    el("h2", { id: "folder-h" }, "A folder on this computer"),
+    el("form", { class: "inline-form", onsubmit: async (e) => {
+      e.preventDefault();
+      try { await api("/storage", { body: { path: path.value } }); renderStorage(); }
+      catch (error) { message.hidden = false; message.textContent = error.message; }
+    } }, path, el("button", { type: "submit" }, "Add folder")),
+    message);
+}
+
 function googlePanel() {
   const box = el("section", { class: "card google", "aria-labelledby": "gd-h", "aria-live": "polite" });
   let timer = null;
@@ -451,11 +465,11 @@ async function allowSave(path, box) {
 async function renderStorage() {
   main.replaceChildren(el("h1", {}, "Storage"));
   const list = el("div", {});
-  main.append(list, microsoftPanel(), googlePanel());
+  main.append(list, folderPanel(), microsoftPanel(), googlePanel());
   try {
     const data = await api("/storage");
     if (!data.storage.length) {
-      list.append(el("p", { class: "muted" }, "No storage yet. Add Microsoft storage below, or a folder in a terminal: eridi storage add <folder>"));
+      list.append(el("p", { class: "muted" }, "No storage yet."));
       return;
     }
     list.append(el("ul", { class: "storage" }, data.storage.map((root, i) => {
@@ -750,6 +764,34 @@ function homePicker(p, fail) {
   return select;
 }
 
+// --- first run ---
+
+function setupForm() {
+  const name = el("input", { id: "setup-name", required: true, autocomplete: "name" });
+  const email = el("input", { id: "setup-email", type: "email", autocomplete: "email" });
+  const folder = el("input", { id: "setup-folder", placeholder: "Blank: keep it on this computer" });
+  const join = el("input", { type: "checkbox", id: "setup-join" });
+  const message = el("p", { class: "error", role: "alert", hidden: true });
+  const form = el("form", { id: "setup", class: "card", onsubmit: async (e) => {
+    e.preventDefault();
+    try {
+      await api("/setup", { body: { name: name.value, email: email.value || null,
+        record_folder: folder.value || null, join: join.checked } });
+      form.remove();
+      location.hash = "#/storage";
+      route();
+    } catch (error) { message.hidden = false; message.textContent = error.message; }
+  } },
+    el("h2", {}, "Welcome to Eridi"),
+    el("label", { for: "setup-name" }, "Your name"), name,
+    el("label", { for: "setup-email" }, "Email"), email,
+    el("label", { for: "setup-folder" }, "Record folder (in your synced cloud folder, to share it)"), folder,
+    el("label", { for: "setup-join", class: "switch" }, join, " Join a record a labmate already set up"),
+    el("div", { class: "actions" }, el("button", { type: "submit" }, "Start")),
+    message);
+  return form;
+}
+
 // --- status and scanning ---
 
 const scanButton = document.getElementById("scan-now");
@@ -776,9 +818,7 @@ async function refreshStatus() {
     scanStatus.textContent = s.scan.running ? "Scanning…"
       : s.scan.last_error ? "Scan failed: " + s.scan.last_error
       : s.scan.last_finished ? "Scanned " + when(s.scan.last_finished) : "";
-    if (!s.initialized && !document.getElementById("setup")) {
-      main.prepend(el("p", { id: "setup", class: "notice" }, "Set up first: run eridi init in a terminal."));
-    }
+    if (!s.initialized && !document.getElementById("setup")) main.prepend(setupForm());
     return s;
   } catch (error) {
     scanStatus.textContent = error.message;

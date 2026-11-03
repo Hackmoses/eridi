@@ -1,0 +1,13 @@
+{
+  "name": "eridi-desktop",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Eridi's desktop app (Tauri). The engine itself is the Python package at the repository root.",
+  "license": "Apache-2.0",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.0"
+  }
+}

@@ -16,7 +16,7 @@ from importlib import resources
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 from eridi import __version__
 from eridi.api.google import GoogleSignIn
@@ -32,7 +32,12 @@ log = logging.getLogger(__name__)
 
 SERVER_FILE = "server.json"
 HEALTH_PATH = "/api/health"
-UI_FILES = {"app.js": "text/javascript", "app.css": "text/css"}
+SIGNED_IN_PAGE = (
+    '<!doctype html><meta charset="utf-8"><title>Eridi</title>'
+    '<script src="/ui/signed-in.js"></script>'
+    '<noscript><meta http-equiv="refresh" content="0; url=/"></noscript>'
+)
+UI_FILES = {"app.js": "text/javascript", "app.css": "text/css", "signed-in.js": "text/javascript"}
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
     "connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -100,7 +105,10 @@ def create_app(
                 return PlainTextResponse(
                     "This link has expired. Run `eridi open` again.", status_code=401
                 )
-            response: Response = RedirectResponse("/", status_code=303)
+            # Not a redirect: when the link is opened from another site (the desktop app's
+            # window starts on its own page), browsers drop a SameSite=Strict cookie set on
+            # a redirect. A page on this site that moves on by itself keeps it.
+            response: Response = HTMLResponse(SIGNED_IN_PAGE)
             response.set_cookie(
                 COOKIE_NAME, guard.session_value, httponly=True, samesite="strict", path="/"
             )

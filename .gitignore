@@ -16,3 +16,4 @@ Thumbs.db
 desktop/src-tauri/binaries/
 desktop/src-tauri/target/
 desktop/src-tauri/gen/
+node_modules/

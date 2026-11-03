@@ -12,6 +12,7 @@ from types import ModuleType
 import pytest
 from fastapi.testclient import TestClient
 
+from conftest import SampleLab
 from eridi import __version__
 from eridi.api.app import create_app
 from eridi.api.scanner import BackgroundScanner
@@ -53,3 +54,25 @@ def test_build_script_names_the_binary_for_tauri(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setenv("ERIDI_TARGET_TRIPLE", "aarch64-apple-darwin")
     assert build.target_triple() == "aarch64-apple-darwin"
     assert build.OUT == ROOT / "desktop" / "src-tauri" / "binaries"
+
+
+def test_first_run_without_a_terminal(sample_lab: SampleLab, tmp_path: Path) -> None:
+    """The desktop app's user never runs `eridi init` or `eridi storage add`."""
+    with Eridi() as eridi:
+        assert not eridi.initialized
+        app = create_app(eridi, token=TOKEN, port=PORT, scanner=BackgroundScanner(eridi, 0))
+        auth = {"Authorization": f"Bearer {TOKEN}"}
+        with TestClient(app, base_url=BASE) as client:
+            bad = client.post("/api/setup", json={"name": "  "}, headers=auth)
+            assert bad.status_code in (400, 422)
+            body = {"name": "B. Lee", "record_folder": str(tmp_path / "rec")}
+            r = client.post("/api/setup", json=body, headers=auth)
+            assert r.status_code == 200 and r.json()["user"] == "B. Lee"
+            assert client.get("/api/status", headers=auth).json()["initialized"]
+            added = client.post("/api/storage", json={"path": str(sample_lab.root)}, headers=auth)
+            assert added.status_code == 201 and added.json()["label"] == sample_lab.root.name
+            again = client.post("/api/storage", json={"path": str(sample_lab.root)}, headers=auth)
+            assert again.status_code == 400 and "already connected" in again.json()["error"]
+            missing = client.post("/api/storage", json={"path": str(tmp_path / "nope")},
+                                  headers=auth)  # fmt: skip
+            assert missing.status_code == 400 and "not a folder" in missing.json()["error"]

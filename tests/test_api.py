@@ -94,7 +94,7 @@ def test_one_time_link_sets_session_cookie(client: TestClient) -> None:
     assert link.startswith(f"{BASE}/?t=")
     path = link.removeprefix(BASE)
     response = client.get(path, follow_redirects=False)
-    assert response.status_code == 303 and response.headers["location"] == "/"
+    assert response.status_code == 200 and '<script src="/ui/signed-in.js">' in response.text
     cookie = response.headers["set-cookie"]
     assert "HttpOnly" in cookie and "SameSite=strict" in cookie
     assert TOKEN not in cookie  # the cookie isn't the API token itself

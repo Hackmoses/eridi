@@ -1,0 +1,27 @@
+[package]
+name = "eridi-desktop"
+version = "0.0.1"
+description = "Eridi desktop app: a window and tray icon around the local Eridi engine"
+license = "Apache-2.0"
+repository = "https://github.com/Hackmoses/eridi"
+edition = "2021"
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

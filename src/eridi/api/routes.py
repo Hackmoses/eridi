@@ -1,5 +1,6 @@
 """JSON endpoints under /api. Each one is a thin wrapper over the Eridi service."""
 
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request
@@ -251,6 +252,18 @@ class MicrosoftDriveIn(BaseModel):
     label: str | None = Field(default=None, max_length=200)
 
 
+class SetupIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: str | None = Field(default=None, max_length=200)
+    record_folder: str | None = Field(default=None, max_length=2000)
+    join: bool = False
+
+
+class FolderStorageIn(BaseModel):
+    path: str = Field(min_length=1, max_length=2000)
+    label: str | None = Field(default=None, max_length=200)
+
+
 class RetryIn(BaseModel):
     on_exists: str | None = Field(default=None, pattern="^(ask|replace|rename)$")
 
@@ -416,6 +429,31 @@ def files(request: Request, q: str = "", limit: int = 20) -> Any:
     eridi = _eridi(request)
     found = eridi.find_files(q, max(1, min(limit, 100))) if q.strip() else []
     return {"files": [file_json(f, eridi.root_label(f.root_id)) for f in found]}
+
+
+@router.post("/setup")
+def setup(request: Request, body: SetupIn) -> Any:
+    """First run, without a terminal: who you are, and where the record lives (blank: on
+    this computer). `join` uses a record folder a labmate already set up."""
+    eridi = _eridi(request)
+    folder = Path(body.record_folder.strip()).expanduser() if body.record_folder else None
+    try:
+        config = eridi.init(body.name, body.email, folder, join=body.join)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    return {"user": config.user.name, "record_folder": str(config.effective_record_folder)}
+
+
+@router.post("/storage")
+def add_folder(request: Request, body: FolderStorageIn) -> Any:
+    """Connect a local or synced folder (like `eridi storage add`), then scan it."""
+    eridi = _eridi(request)
+    try:
+        root = eridi.add_root(Path(body.path.strip()).expanduser(), body.label or None)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    _scanner(request).request()
+    return JSONResponse(root_json(root, False), status_code=201)
 
 
 @router.get("/storage")

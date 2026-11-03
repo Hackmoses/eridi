@@ -224,3 +224,20 @@ def test_project_views(browser: Any, sample_lab: SampleLab, tmp_path: Path) -> N
             page.get_by_role("button", name="Open questions").click()
             page.wait_for_selector(".view-panel >> text=No open questions")
             assert errors == []
+
+
+def test_first_run_in_the_app(browser: Any, sample_lab: SampleLab, tmp_path: Path) -> None:
+    """M14: set up and add a folder without a terminal."""
+    with Eridi() as eridi, live_server(eridi) as (port, guard):
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"http://127.0.0.1:{port}/?t={guard.new_link()}")
+        page.get_by_label("Your name").fill("B. Lee")
+        page.get_by_role("button", name="Start").click()
+        page.wait_for_selector("h1:has-text('Storage')")
+        page.get_by_label("Folder path").fill(str(sample_lab.root))
+        page.get_by_role("button", name="Add folder").click()
+        page.wait_for_selector(f".storage >> text={sample_lab.root.name}")
+        assert errors == []
+        assert eridi.initialized and eridi.config.user.name == "B. Lee"
