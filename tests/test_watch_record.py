@@ -59,7 +59,9 @@ def test_watcher_picks_up_a_new_entry_within_the_debounce_window(lab: Eridi) -> 
         assert wait_for(lambda: bool(arrived)), "the new entry was not noticed"
         elapsed = time.monotonic() - started
         assert [e.id for e in arrived] == [entry.id]
-        assert elapsed < debounce + 1.5  # the debounce window plus the watcher's tick
+        # The debounce window, plus the watcher's 0.5 s tick and the OS's event delivery
+        # (macOS FSEvents can take a second or more).
+        assert elapsed < debounce + 4.0
         assert lab.last_activity is not None
         assert [e.id for e in lab.recent()] == [entry.id]
         assert entry.id in {h.id for h in lab.search("anti-pERK lot")}
