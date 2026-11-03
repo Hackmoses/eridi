@@ -163,7 +163,13 @@ Tasks:
 1. **Snapshots** (`core/snapshots.py`): store extracted text gzipped at
    `<app-data>/snapshots/ab/<sha>.txt.gz`; `put(text) -> sha`, `get(sha) -> text`; size cap with
    eviction of oldest unreferenced snapshots; never evict snapshots referenced by record entries.
-   *Tests:* dedup of identical text; eviction order; referenced snapshots survive eviction.
+   Also keep an append-only version log at `<app-data>/snapshots/versions.jsonl`, one line per
+   text version seen (`root_id`, `path`, `text_sha256`, `first_seen`, `source`), so the index's
+   `text_versions` table can be rebuilt; `rebuild` reloads it. Lines whose snapshot was evicted
+   stay in the log (the diff just isn't available).
+   *Tests:* dedup of identical text; eviction order; referenced snapshots survive eviction;
+   a torn last line in the log is ignored; rebuild restores `text_versions` from the log, so
+   rebuild equivalence also covers version history.
 2. **Scanner** (`core/scan.py`): for each root with search on: list files; re-examine only on
    size/mtime change; hash; extract if hash changed; snapshot text if text hash changed; mark
    removed files `status="missing"` (don't delete their history). Return a `ScanReport`

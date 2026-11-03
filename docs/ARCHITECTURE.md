@@ -101,7 +101,7 @@ class Connector(Protocol):
 meta(key, value)                                  -- schema_version, last_full_scan
 roots(id, kind, label, location, search, save, is_home_default)
 files(id, root_id, path, size, modified, content_sha256, text_sha256, status, ext, placeholder, last_seen)
-text_versions(file_id, text_sha256, first_seen, source)   -- source: "scan" or "provider-history"
+text_versions(file_id, text_sha256, first_seen, source)   -- source: "scan" or "provider-history"; rebuilt from snapshots/versions.jsonl
 files_fts(path, title, body)                      -- FTS5, external content = latest text
 entries(id, kind, created_at, author_name, author_kind, project_id, outcome, text, supersedes, target_id, json)
 entry_subjects(entry_id, root_id, path, text_sha256)
@@ -160,6 +160,7 @@ Write tool, only when the user turns on `mcp.allow_writes`:
 | Config | `<app-data>/config.toml` | No |
 | Index | `<app-data>/index.sqlite` | No (disposable) |
 | Snapshots | `<app-data>/snapshots/` | No, unless sharing is turned on |
+| Text version log | `<app-data>/snapshots/versions.jsonl` (hashes and paths, no text) | No |
 | Record | User-chosen record folder | Yes, via the user's own cloud sync |
 | Secrets | OS keychain | No |
 | Logs | `<app-data>/logs/` (no document text) | No |
