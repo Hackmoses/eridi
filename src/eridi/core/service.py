@@ -11,13 +11,21 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from eridi.connectors import connector_for
 from eridi.connectors.base import Connector, ConnectorError
 from eridi.connectors.local import read_root_marker, write_root_marker
+from eridi.connectors.msauth import MicrosoftAccount, MicrosoftAuth
+from eridi.connectors.msgraph import (
+    DriveInfo,
+    GraphClient,
+    MsGraphConnector,
+    list_drives,
+    root_id_for,
+)
 from eridi.core import changes as changes_module
 from eridi.core.changes import (
     BASELINE_PREFIX,
@@ -29,6 +37,7 @@ from eridi.core.changes import (
 )
 from eridi.core.config import Config, User, config_path, load_config, save_config
 from eridi.core.ids import is_ulid, new_id
+from eridi.core.index.cloud import CURSOR_PREFIX, IndexDeltaCache
 from eridi.core.index.db import check_fts5, get_meta, index_path, open_index, set_meta
 from eridi.core.index.files import (
     file_moves,
@@ -195,6 +204,8 @@ class Eridi:
         self._scan_lock = threading.Lock()
         self.snapshots = SnapshotStore(cap_bytes=self._config.settings.snapshot_cap_mb * 2**20)
         self._store: RecordStore | None = None
+        self._microsoft: MicrosoftAuth | None = None
+        self.graph_client_factory: Callable[[Callable[[], str]], GraphClient] = GraphClient
         self._last_refresh = 0.0
         self.last_activity: str | None = None
         """When a watcher last recorded a change (UIs refresh when this moves)."""
@@ -487,6 +498,8 @@ class Eridi:
                 )
                 self.conn.execute("DELETE FROM files WHERE root_id = ?", (root_id,))
                 self.conn.execute("DELETE FROM roots WHERE id = ?", (root_id,))
+                self.conn.execute("DELETE FROM cloud_items WHERE root_id = ?", (root_id,))
+                self.conn.execute("DELETE FROM meta WHERE key = ?", (CURSOR_PREFIX + root_id,))
 
     def _own_folders_ignored(self, root: Root) -> list[str]:
         """Patterns that keep Eridi's own folders out of a root that happens to contain them."""
@@ -499,8 +512,106 @@ class Eridi:
                 continue
         return patterns
 
+    def _split_file_id(self, ref: str) -> tuple[str, str] | None:
+        """`<root_id>:<path>` → (root_id, path) for a connected storage. Storage IDs can
+        contain ":" themselves (`ms:<driveId>`), so match the longest known one."""
+        for root in sorted(self._config.roots, key=lambda r: -len(r.id)):
+            if ref.startswith(root.id + ":"):
+                return root.id, ref[len(root.id) + 1 :]
+        return None
+
     def connector(self, root: Root) -> Connector:
+        if root.kind == "msgraph":
+            return self._graph_connector(root)
         return connector_for(root, self._config.settings, ignore=self._own_folders_ignored(root))
+
+    # --- Microsoft OneDrive and SharePoint ---
+
+    @property
+    def microsoft(self) -> MicrosoftAuth:
+        """Microsoft sign-in (created on first use; tests may replace it)."""
+        if self._microsoft is None:
+            self._microsoft = MicrosoftAuth(self._config.settings.microsoft_client_id)
+        return self._microsoft
+
+    @microsoft.setter
+    def microsoft(self, auth: MicrosoftAuth) -> None:
+        self._microsoft = auth
+
+    def _graph(self, account_id: str) -> GraphClient:
+        auth = self.microsoft
+        return self.graph_client_factory(lambda: auth.token(account_id))
+
+    def _delta_cache(self) -> IndexDeltaCache:
+        if str(self._index_path) == ":memory:":
+            return IndexDeltaCache(conn=self.conn)
+        return IndexDeltaCache(self._index_path)
+
+    def _graph_connector(self, root: Root) -> MsGraphConnector:
+        if not root.account:
+            raise ConnectorError(
+                f"{root.label!r} has no Microsoft account. Remove it and add it again with "
+                "`eridi storage add-microsoft`."
+            )
+        return MsGraphConnector(
+            root.id, root.location, self._graph(root.account), cache=self._delta_cache()
+        )
+
+    def _microsoft_status(self, root: Root) -> tuple[str, str]:
+        """Doctor's check for a Microsoft drive, without going online."""
+        try:
+            accounts = {a.id: a.username for a in self.microsoft.accounts()}
+        except ConnectorError as exc:
+            return "error", str(exc)
+        if root.account not in accounts:
+            return "warning", (
+                "Not signed in to Microsoft on this computer. Sign in again with "
+                "`eridi storage add-microsoft`."
+            )
+        state = "search on" if root.search else "search off"
+        return "ok", f"Microsoft, as {accounts[root.account]} ({state})."
+
+    def microsoft_sign_in(
+        self, *, device_code: bool = False, show: Callable[[str], None] = print
+    ) -> tuple[MicrosoftAccount, list[DriveInfo]]:
+        """Sign in to Microsoft; return the account and the drives it can read."""
+        account = self.microsoft.sign_in(device_code=device_code, show=show)
+        return account, self.microsoft_drives(account.id)
+
+    def microsoft_drives(self, account_id: str) -> list[DriveInfo]:
+        """The account's OneDrive and the libraries of SharePoint sites they follow."""
+        return list_drives(self._graph(account_id))
+
+    def add_microsoft_root(
+        self,
+        account_id: str,
+        drive: DriveInfo | str,
+        label: str | None = None,
+        *,
+        search: bool = True,
+    ) -> Root:
+        """Connect a OneDrive or SharePoint library. Nothing is downloaded until a scan."""
+        if isinstance(drive, str):
+            found = next((d for d in self.microsoft_drives(account_id) if d.id == drive), None)
+            if found is None:
+                raise EridiError(
+                    f"No OneDrive or followed SharePoint library has ID {drive!r}. "
+                    "To add a SharePoint library, follow its site in SharePoint first."
+                )
+            drive = found
+        with self._lock:
+            root_id = root_id_for(drive.id)
+            existing = self._config.root(root_id)
+            if existing is not None:
+                raise EridiError(f"{drive.label} is already connected as {existing.label!r}.")
+            root = Root(
+                root_id, (label or drive.label).strip() or drive.label, drive.id,
+                kind="msgraph", search=search, account=account_id,
+            )  # fmt: skip
+            self._save(self._config.with_root(root))
+            with self.conn:
+                upsert_root(self.conn, root)
+            return root
 
     # --- projects ---
 
@@ -594,8 +705,9 @@ class Eridi:
         ref = ref.strip()
         if not ref:
             raise EridiError("Give a folder: a path, or a storage name for all of it.")
-        root_id, sep, rest = ref.partition(":")
-        if sep and self._config.root(root_id) is not None:
+        split = self._split_file_id(ref)
+        if split is not None:
+            root_id, rest = split
             path = rest.replace("\\", "/").strip("/")
             return ProjectFolder(root_id, normalize_relative(path) if path else "")
         for root in self._config.roots:
@@ -855,9 +967,9 @@ class Eridi:
         ref = ref.strip()
         if not ref:
             raise FileNotFoundInIndexError(ref)
-        root_id, sep, rest = ref.partition(":")
-        if sep and self._config.root(root_id) is not None:
-            found = get_file(self.conn, root_id, rest)
+        split = self._split_file_id(ref)
+        if split is not None:
+            found = get_file(self.conn, *split)
             if found is not None:
                 return found
         # A path on disk inside a connected folder.
@@ -1209,6 +1321,9 @@ class Eridi:
                 report.add("Storage", "warning", "No storage connected. Run `eridi storage add`.")
             for root in self._config.roots:
                 location = Path(root.location)
+                if root.kind == "msgraph":
+                    report.add(f"Storage {root.label!r}", *self._microsoft_status(root))
+                    continue
                 if root.kind == "local" and not location.is_dir():
                     report.add(
                         f"Storage {root.label!r}", "error",

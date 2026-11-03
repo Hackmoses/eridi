@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from eridi.api.microsoft import MicrosoftSignIn
 from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import Guard
 from eridi.core.changes import Activity, FileDiff, PendingChange
@@ -207,6 +208,15 @@ class ProjectUpdateIn(BaseModel):
 class FolderIn(BaseModel):
     folder: str = Field(min_length=1, max_length=2000)
     """A folder path, a storage name (all of it), or `<storage ID>:<folder>`."""
+
+
+class MicrosoftSignInIn(BaseModel):
+    device_code: bool = False
+
+
+class MicrosoftDriveIn(BaseModel):
+    drive_id: str = Field(min_length=1, max_length=500)
+    label: str | None = Field(default=None, max_length=200)
 
 
 class StorageIn(BaseModel):
@@ -463,6 +473,39 @@ def mark_storage(request: Request, root_id: str) -> Any:
     except KNOWN_ERRORS as exc:
         return error(exc)
     return root_json(root, True)
+
+
+def _sign_in(request: Request) -> MicrosoftSignIn:
+    flow: MicrosoftSignIn = request.app.state.microsoft
+    return flow
+
+
+@router.get("/microsoft/sign-in")
+def microsoft_status(request: Request) -> Any:
+    return _sign_in(request).as_json()
+
+
+@router.post("/microsoft/sign-in")
+def microsoft_sign_in(request: Request, body: MicrosoftSignInIn) -> Any:
+    flow = _sign_in(request)
+    started = flow.start(device_code=body.device_code)
+    return JSONResponse({**flow.as_json(), "started": started}, status_code=202)
+
+
+@router.post("/microsoft/storage")
+def add_microsoft_storage(request: Request, body: MicrosoftDriveIn) -> Any:
+    eridi = _eridi(request)
+    flow = _sign_in(request)
+    status = flow.as_json()
+    drive = flow.drive(body.drive_id)
+    if status["state"] != "done" or drive is None:
+        return error(EridiError("Sign in to Microsoft first, then choose a library."))
+    try:
+        root = eridi.add_microsoft_root(status["account_id"], drive, body.label)
+    except KNOWN_ERRORS as exc:
+        return error(exc)
+    _scanner(request).request()  # read it right away
+    return JSONResponse(root_json(root, None), status_code=201)
 
 
 @router.post("/scan")

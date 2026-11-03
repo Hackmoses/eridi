@@ -17,6 +17,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 
+from eridi.api.microsoft import MicrosoftSignIn
 from eridi.api.routes import router
 from eridi.api.scanner import BackgroundScanner
 from eridi.api.security import COOKIE_NAME, Guard, get_or_create_token
@@ -70,6 +71,7 @@ def create_app(
     app.state.eridi = eridi
     app.state.guard = guard
     app.state.scanner = scanner
+    app.state.microsoft = MicrosoftSignIn(eridi)
     app.include_router(router, prefix="/api")
 
     @app.middleware("http")

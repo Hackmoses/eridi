@@ -20,6 +20,8 @@ from rich.markup import escape
 from rich.text import Text
 
 from eridi import __version__
+from eridi.connectors.msauth import ApprovalRequiredError
+from eridi.connectors.msgraph import DriveInfo, root_id_for
 from eridi.core.changes import Activity, FileDiff, FileStats
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
@@ -352,9 +354,69 @@ def storage_list() -> None:
         for r in roots:
             search = "search on" if r.search else "search off"
             save = "save on" if r.save else "save off"
-            out.print(f"[bold]{escape(r.label)}[/bold]  {escape(r.location)}")
+            where = "Microsoft" if r.kind == "msgraph" else r.location
+            out.print(f"[bold]{escape(r.label)}[/bold]  {escape(where)}")
             marked = " · marked" if eridi.root_marker(r.id) == r.id else ""
             out.print(f"  [dim]{search} · {save}{marked} · {r.id}[/dim]")
+
+
+@storage_app.command("add-microsoft")
+def storage_add_microsoft(
+    device_code: Annotated[
+        bool, typer.Option(help="Sign in with a code instead of opening a browser here.")
+    ] = False,
+    drive: Annotated[
+        list[str] | None,
+        typer.Option(help="Library to add, by name or number from the list; repeat for more."),
+    ] = None,
+    all_: Annotated[bool, typer.Option("--all", help="Add every library listed.")] = False,
+) -> None:
+    """Connect OneDrive or SharePoint document libraries (read-only)."""
+    with session() as eridi:
+        out = console()
+        try:
+            account, drives = eridi.microsoft_sign_in(
+                device_code=device_code, show=lambda message: out.print(escape(message))
+            )
+        except ApprovalRequiredError as exc:
+            out.print("[yellow]Your university needs to approve this app.[/yellow]")
+            out.print(f"Send IT this link: {exc.consent_url}")
+            out.print("and the explanation in docs/IT_APPROVAL.md (what Eridi reads, and why).")
+            raise typer.Exit(1) from None
+        connected = {r.id for r in eridi.list_roots()}
+        out.print(f"Signed in as [bold]{escape(account.username)}[/bold].")
+        for n, d in enumerate(drives, start=1):
+            added = "  [dim](connected)[/dim]" if root_id_for(d.id) in connected else ""
+            out.print(f"  {n}. {escape(d.label)}{added}")
+        if all_:
+            chosen = drives
+        elif drive:
+            chosen = [pick_drive(drives, ref) for ref in drive]
+        elif sys.stdin.isatty():
+            answer = typer.prompt("Add which (numbers separated by commas, or Enter for none)",
+                                  default="", show_default=False)  # fmt: skip
+            chosen = [pick_drive(drives, ref) for ref in answer.replace(",", " ").split()]
+        else:
+            out.print("Choose with --drive <name or number>, or --all.")
+            return
+        for d in chosen:
+            if root_id_for(d.id) in connected:
+                continue
+            root = eridi.add_microsoft_root(account.id, d)
+            out.print(f"Added [bold]{escape(root.label)}[/bold].")
+        if chosen:
+            out.print("Next: eridi scan")
+        out.print("[dim]To add a SharePoint library, follow its site in SharePoint first.[/dim]")
+
+
+def pick_drive(drives: list[DriveInfo], ref: str) -> DriveInfo:
+    ref = ref.strip()
+    if ref.isdigit() and 1 <= int(ref) <= len(drives):
+        return drives[int(ref) - 1]
+    matches = [d for d in drives if ref in (d.id, d.label) or ref.lower() == d.label.lower()]
+    if len(matches) != 1:
+        raise EridiError(f"No single library is called {ref!r}. Use its number from the list.")
+    return matches[0]
 
 
 @storage_app.command("mark")
