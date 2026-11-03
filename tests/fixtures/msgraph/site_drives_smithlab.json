@@ -1,0 +1,9 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#drives",
+  "value": [
+    {"id": "b!SmithLabDocs01", "driveType": "documentLibrary", "name": "Documents",
+     "webUrl": "https://uni.sharepoint.com/sites/SmithLab/Shared%20Documents"},
+    {"id": "b!SmithLabProto02", "driveType": "documentLibrary", "name": "Protocols",
+     "webUrl": "https://uni.sharepoint.com/sites/SmithLab/Protocols"}
+  ]
+}

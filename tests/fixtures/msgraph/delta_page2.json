@@ -1,0 +1,17 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(driveItem)",
+  "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/b!SmithLabDocs01/root/delta?token=t1",
+  "value": [
+    {"id": "FILE2", "name": "lab_meeting_2026-10-14.md",
+     "file": {"mimeType": "text/markdown"},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "ROOT"},
+     "lastModifiedDateTime": "2026-10-14T16:00:00Z", "size": 92},
+    {"id": "NOTEBOOK1", "name": "Lab notebook", "package": {"type": "oneNote"},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "ROOT"},
+     "lastModifiedDateTime": "2026-10-20T11:00:00Z", "size": 2048000},
+    {"id": "SHORTCUT1", "name": "Shared with me",
+     "remoteItem": {"id": "X", "parentReference": {"driveId": "b!other"}},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "ROOT"},
+     "lastModifiedDateTime": "2026-10-20T11:00:00Z", "size": 0}
+  ]
+}

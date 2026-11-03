@@ -1,0 +1,24 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#Collection(driveItem)",
+  "@odata.deltaLink": "https://graph.microsoft.com/v1.0/drives/b!SmithLabDocs01/root/delta?token=t2",
+  "value": [
+    {"id": "ROOT", "name": "root", "root": {}, "folder": {"childCount": 3},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "driveType": "documentLibrary"},
+     "lastModifiedDateTime": "2026-11-03T09:00:00Z", "size": 0},
+    {"id": "FOLDER1", "name": "Protocols 2026", "folder": {"childCount": 2},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "ROOT"},
+     "lastModifiedDateTime": "2026-11-03T09:00:00Z", "size": 0},
+    {"id": "FILE1", "name": "Western_blot_blocking_v7.docx",
+     "file": {"mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              "hashes": {"quickXorHash": "BBBBBBBBBBBBBBBBBBBBBBBBBBB="}},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "FOLDER1"},
+     "lastModifiedDateTime": "2026-11-03T08:59:00Z", "size": 36950,
+     "lastModifiedBy": {"user": {"displayName": "B. Lee"}}},
+    {"id": "FILE2", "deleted": {"state": "deleted"},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "ROOT"}},
+    {"id": "FILE3", "name": "Antibody_lot_log_2026.csv",
+     "file": {"mimeType": "text/csv"},
+     "parentReference": {"driveId": "b!SmithLabDocs01", "id": "ROOT"},
+     "lastModifiedDateTime": "2026-11-03T08:30:00Z", "size": 70}
+  ]
+}

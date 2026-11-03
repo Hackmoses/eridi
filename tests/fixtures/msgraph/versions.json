@@ -1,0 +1,11 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#drives('b!SmithLabDocs01')/items('FILE1')/versions",
+  "value": [
+    {"id": "3.0", "lastModifiedDateTime": "2026-11-03T08:59:00Z", "size": 36950,
+     "lastModifiedBy": {"user": {"displayName": "B. Lee", "email": "b.lee@uni.example"}}},
+    {"id": "2.0", "lastModifiedDateTime": "2026-10-14T13:05:22Z", "size": 36912,
+     "lastModifiedBy": {"user": {"displayName": "A. Okafor", "email": "a.okafor@uni.example"}}},
+    {"id": "1.0", "lastModifiedDateTime": "2026-09-30T10:11:12Z", "size": 35001,
+     "lastModifiedBy": {"application": {"displayName": "SharePoint Migration"}}}
+  ]
+}

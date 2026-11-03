@@ -1,0 +1,1 @@
+{"error": {"code": "activityLimitReached", "message": "The request has been throttled", "innerError": {"code": "throttledRequest", "date": "2026-11-03T10:00:00", "request-id": "r2"}}}

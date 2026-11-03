@@ -1,0 +1,17 @@
+{
+  "@odata.context": "https://graph.microsoft.com/v1.0/$metadata#sites",
+  "value": [
+    {
+      "id": "uni.sharepoint.com,1111aaaa-0000-0000-0000-000000000001,2222bbbb-0000-0000-0000-000000000002",
+      "displayName": "Smith Lab",
+      "name": "SmithLab",
+      "webUrl": "https://uni.sharepoint.com/sites/SmithLab"
+    },
+    {
+      "id": "uni.sharepoint.com,3333cccc-0000-0000-0000-000000000003,4444dddd-0000-0000-0000-000000000004",
+      "displayName": "Core Facility",
+      "name": "CoreFacility",
+      "webUrl": "https://uni.sharepoint.com/sites/CoreFacility"
+    }
+  ]
+}
