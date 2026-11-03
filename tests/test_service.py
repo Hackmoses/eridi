@@ -290,3 +290,29 @@ def test_search_works_while_a_scan_runs(
     release.set()
     scanning.join(10)
     assert not scanning.is_alive()
+
+
+def test_search_results_carry_file_history(lab: Eridi, sample_lab: SampleLab) -> None:
+    first = next(
+        h
+        for h in lab.search("Primary antibody incubation")
+        if h.kind == "file" and h.path == PROTOCOL
+    )
+    assert first.stats is not None and not first.stats.interesting  # never changed yet
+    edit_protocol(sample_lab, "Primary antibody incubation: 2 h at RT.")
+    lab.scan()
+    hit = next(
+        h
+        for h in lab.search("Primary antibody incubation")
+        if h.kind == "file" and h.path == PROTOCOL
+    )
+    assert hit.stats is not None
+    assert hit.stats.versions == 2 and hit.stats.needs_why and hit.stats.notes == 0
+    assert hit.stats.last_edited is not None
+    lab.add_note("Longer for the new lot.", file=PROTOCOL)
+    hit = next(
+        h
+        for h in lab.search("Primary antibody incubation")
+        if h.kind == "file" and h.path == PROTOCOL
+    )
+    assert hit.stats is not None and hit.stats.notes == 1 and not hit.stats.needs_why

@@ -20,7 +20,7 @@ from rich.markup import escape
 from rich.text import Text
 
 from eridi import __version__
-from eridi.core.changes import Activity, FileDiff
+from eridi.core.changes import Activity, FileDiff, FileStats
 from eridi.core.config import ConfigError
 from eridi.core.index.db import IndexUnavailableError
 from eridi.core.index.search import SearchHit, group_label, parse_query
@@ -142,6 +142,43 @@ def pick_file(eridi: Eridi, ref: str) -> FileInfo:
             if 1 <= choice <= len(candidates):
                 return candidates[choice - 1]
             out.print(f"Choose a number from 1 to {len(candidates)}.")
+
+
+def ago(timestamp: str) -> str:
+    """How long ago, in words: "just now", "5 min ago", "yesterday", "12 Oct"."""
+    try:
+        moment = parse_timestamp(timestamp)
+    except ValueError:
+        return timestamp
+    seconds = (datetime.now(moment.tzinfo) - moment).total_seconds()
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    if seconds < 2 * 86400:
+        return "yesterday"
+    if seconds < 14 * 86400:
+        return f"{int(seconds // 86400)} days ago"
+    return moment.astimezone().strftime("%d %b %Y")
+
+
+def history_line(stats: FileStats | None) -> str:
+    """e.g. "edited 2 days ago · 3 versions · 2 notes · needs a why" (rich markup)."""
+    if stats is None or not stats.interesting:
+        return ""
+    parts = []
+    if stats.last_edited:
+        parts.append(f"edited {ago(stats.last_edited)}")
+    if stats.versions > 1:
+        parts.append(f"{stats.versions} versions")
+    if stats.notes:
+        parts.append(f"{stats.notes} note{'s' if stats.notes != 1 else ''}")
+    line = "[dim]" + " · ".join(parts) + "[/dim]"
+    if stats.needs_why:
+        line += " · [yellow]needs a why[/yellow]"
+    return line
 
 
 def highlighted(hit: SearchHit) -> Text:
@@ -355,6 +392,9 @@ def search_command(
                 source = f"{hit.root_label} · " if hit.root_label else ""
                 meta = escape(source + (hit.path or ""))
                 out.print(f"[green]file[/green] {escape(hit.title)}  [dim]{meta}[/dim]")
+                story = history_line(hit.stats)
+                if story:
+                    out.print(f"    {story}")
             snippet = highlighted(hit)
             if snippet.plain.strip():
                 out.print(Text("    ") + snippet)

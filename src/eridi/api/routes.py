@@ -104,6 +104,14 @@ def hit_json(h: SearchHit) -> dict[str, Any]:
         "partial": not h.matched_all,
         "match": h.match,
         "group": group_label(h),
+        "history": None
+        if h.stats is None
+        else {
+            "versions": h.stats.versions,
+            "notes": h.stats.notes,
+            "last_edited": h.stats.last_edited,
+            "needs_why": h.stats.needs_why,
+        },
     }
 
 

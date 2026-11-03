@@ -130,6 +130,13 @@ def hit_json(hit: SearchHit) -> dict[str, Any]:
                 "created_at": hit.created_at}  # fmt: skip
     else:
         out["file_id"] = hit.id
+        if hit.stats is not None and hit.stats.interesting:
+            out["history"] = {
+                "versions": hit.stats.versions,
+                "notes_about_it": hit.stats.notes,
+                "last_edited": hit.stats.last_edited,
+                "latest_change_unexplained": hit.stats.needs_why,
+            }
     if hit.path:
         out |= {"path": hit.path, "storage": hit.root_label}
     out["match"] = group_label(hit).lower()

@@ -127,6 +127,9 @@ textarea { width: 100%; resize: vertical; }
 .result.entry .tag { color: var(--accent); }
 .meta { color: var(--muted); font-size: .88rem; word-break: break-word; }
 .snippet { margin: .25rem 0 0; }
+.story { font-size: .85rem; margin-top: .1rem; }
+.story a { color: var(--muted); }
+.story a.needs-why { color: var(--accent); font-weight: 600; }
 mark { background: var(--mark); color: inherit; border-radius: 2px; }
 .muted { color: var(--muted); }
 .error { color: var(--del-fg); }

@@ -278,3 +278,12 @@ def test_search_groups_results(lab: SampleLab) -> None:
     assert out.index("Exact phrase") < out.index("Blocking buffer comparison")
     assert "Only “blocking”" in out  # the docx protocol has "blocking" but not "buffer"
     assert "Exact phrase" not in ok("search", "milk")  # one word: no groups
+
+
+def test_search_shows_file_history(lab: SampleLab) -> None:
+    edit_protocol(lab, "Primary antibody incubation: 2 h at RT.")
+    ok("scan")
+    out = ok("search", "primary antibody")
+    assert "edited just now · 2 versions · needs a why" in out
+    ok("why", PROTOCOL, "Longer incubation.")
+    assert "2 versions · 1 note" in ok("search", "primary antibody")

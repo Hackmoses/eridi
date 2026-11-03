@@ -7,6 +7,7 @@ An entry explains it when its `change.to_text_sha256`, or one of its subjects'
 """
 
 import difflib
+import json
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass, replace
@@ -340,3 +341,63 @@ def recent_activity(
             )
         )
     return out
+
+
+@dataclass(frozen=True)
+class FileStats:
+    """A file's story in one line: how often it changed, notes about it, and whether its
+    latest change still needs a why."""
+
+    versions: int
+    notes: int
+    last_edited: str | None
+    """When its text last changed (None if it never has since Eridi first saw it)."""
+    needs_why: bool
+
+    @property
+    def interesting(self) -> bool:
+        return self.versions > 1 or self.notes > 0
+
+
+def file_stats(
+    conn: sqlite3.Connection, root_id: str, path: str, dismissed: Collection[str] = ()
+) -> FileStats | None:
+    row = conn.execute(
+        "SELECT id, text_sha256, status FROM files WHERE root_id = ? AND path = ?",
+        (root_id, path),
+    ).fetchone()
+    if row is None:
+        return None
+    file_id, current, status = row[0], row[1], row[2]
+    versions = conn.execute(
+        "SELECT count(*), max(first_seen) FROM text_versions WHERE file_id = ?", (file_id,)
+    ).fetchone()
+    count = int(versions[0])
+    paths = [path, *(r[0] for r in conn.execute(
+        "SELECT from_path FROM file_moves WHERE file_id = ?", (file_id,)))]  # fmt: skip
+    notes = conn.execute(
+        "SELECT count(DISTINCT e.id) FROM entries e JOIN entry_subjects s ON s.entry_id = e.id "
+        "WHERE s.root_id = ? AND s.path IN (SELECT value FROM json_each(?)) "
+        "AND e.state = 'current' AND e.kind != 'tombstone'",
+        (root_id, json.dumps(paths)),
+    ).fetchone()[0]
+    needs_why = False
+    if count > 1 and current is not None and status == "present":
+        explained = conn.execute(
+            "SELECT 1 FROM entries e WHERE e.state != 'retracted' AND e.kind != 'tombstone' "
+            "AND (e.change_to_text_sha256 = ? OR e.id IN "
+            "(SELECT entry_id FROM entry_subjects WHERE text_sha256 = ?)) LIMIT 1",
+            (current, current),
+        ).fetchone()
+        previous = previous_version(conn, file_id, current)
+        needs_why = (
+            explained is None
+            and previous is not None
+            and change_key(root_id, previous, current) not in set(dismissed)
+        )
+    return FileStats(
+        versions=count,
+        notes=int(notes),
+        last_edited=versions[1] if count > 1 else None,
+        needs_why=needs_why,
+    )

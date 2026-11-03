@@ -179,6 +179,12 @@ def test_full_flow(client: TestClient, sample_lab: SampleLab) -> None:
     assert [e["id"] for e in history["entries"]] == [saved["id"]]
     assert history["file"]["storage"] == "Lab Drive"
 
+    files = client.get("/api/search", params={"q": "primary"}, headers=AUTH).json()["results"]
+    protocol = next(r for r in files if r["path"] == PROTOCOL)
+    assert protocol["history"] == {
+        "versions": 2, "notes": 1, "last_edited": protocol["history"]["last_edited"],
+        "needs_why": False,
+    }  # fmt: skip
     results = client.get("/api/search", params={"q": "longer"}, headers=AUTH).json()["results"]
     assert results[0]["id"] == saved["id"]
     assert ["longer", True] in results[0]["snippet"]

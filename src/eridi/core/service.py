@@ -24,6 +24,7 @@ from eridi.core.changes import (
     Activity,
     FileDiff,
     PendingChange,
+    file_stats,
     recent_activity,
 )
 from eridi.core.config import Config, User, config_path, load_config, save_config
@@ -513,9 +514,17 @@ class Eridi:
     # --- finding things ---
 
     def search(self, query: str, limit: int = 20, project: str | None = None) -> list[SearchHit]:
+        """Search files and notes. File hits carry their history (`SearchHit.stats`)."""
         with self._lock:
             self._refresh_records()
-            return search(self.conn, query, limit, project)
+            hits = search(self.conn, query, limit, project)
+            dismissed = self._config.dismissed_changes
+            return [
+                replace(h, stats=file_stats(self.conn, h.root_id, h.path, dismissed))
+                if h.kind == "file" and h.root_id and h.path
+                else h
+                for h in hits
+            ]
 
     def resolve_file(self, ref: str) -> FileInfo:
         """Find a file by ID (`root_id:path`), path, path on disk, or part of its name."""

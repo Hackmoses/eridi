@@ -13,7 +13,10 @@ characters that never occur in extracted text); use `SearchHit.segments()` or
 import re
 import sqlite3
 from dataclasses import dataclass, replace
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from eridi.core.changes import FileStats
 
 HIGHLIGHT_START = "\x02"
 HIGHLIGHT_END = "\x03"
@@ -51,6 +54,8 @@ class SearchHit:
     """How it matched; results come in this order (see `MATCH_ORDER`)."""
     term: str | None = None
     """For `match == "some"`: the one search word it contains."""
+    stats: "FileStats | None" = None
+    """For files: versions, notes, last edit and whether a why is needed (set by Eridi)."""
 
     @property
     def matched_all(self) -> bool:

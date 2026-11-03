@@ -49,6 +49,28 @@ function historyLink(fileId, label) {
   return el("a", { href: "#/history?file=" + encodeURIComponent(fileId) }, label);
 }
 
+function ago(timestamp) {
+  const seconds = (Date.now() - new Date(timestamp).getTime()) / 1000;
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return Math.floor(seconds / 60) + " min ago";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + " h ago";
+  if (seconds < 2 * 86400) return "yesterday";
+  if (seconds < 14 * 86400) return Math.floor(seconds / 86400) + " days ago";
+  return new Date(timestamp).toLocaleDateString(undefined, { dateStyle: "medium" });
+}
+
+function historyBadge(r) {
+  const h = r.history;
+  if (!h || (h.versions < 2 && !h.notes)) return null;
+  const parts = [];
+  if (h.last_edited) parts.push("edited " + ago(h.last_edited));
+  if (h.versions > 1) parts.push(h.versions + " versions");
+  if (h.notes) parts.push(h.notes + (h.notes === 1 ? " note" : " notes"));
+  return el("div", { class: "story" },
+    historyLink(r.file_id, parts.join(" · ")),
+    h.needs_why ? [" · ", el("a", { href: "#/changes", class: "needs-why" }, "needs a why")] : null);
+}
+
 function snippet(parts) {
   return el("p", { class: "snippet" },
     (parts || []).map(([text, hit]) => (hit ? el("mark", {}, text) : text)));
@@ -126,6 +148,7 @@ function renderSearch(params) {
         const item = el("li", { class: "result " + r.type },
           el("div", { class: "title" }, el("span", { class: "tag" }, isFile ? "File" : "Note"), title),
           el("div", { class: "meta" }, meta, !isFile && r.file_id ? [" · ", historyLink(r.file_id, "history")] : null),
+          isFile ? historyBadge(r) : null,
           snippet(r.snippet));
         return heading ? [heading, item] : [item];
       })));
