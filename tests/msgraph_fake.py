@@ -15,7 +15,7 @@ from eridi.connectors.msgraph import GRAPH, GraphClient
 
 FIXTURES = Path(__file__).parent / "fixtures" / "msgraph"
 DRIVE = "b!SmithLabDocs01"
-TOKEN = "fake-access-token"
+TOKEN = "fake-access-token"  # noqa: S105 - test value
 
 
 def fixture(name: str) -> dict[str, Any]:
