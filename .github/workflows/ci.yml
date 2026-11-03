@@ -29,6 +29,9 @@ jobs:
           enable-cache: true
       - name: Install
         run: uv sync --locked
+      - name: Install Chromium for the browser test
+        if: runner.os == 'Linux'
+        run: uv run playwright install --with-deps chromium
       - name: Lint
         run: uv run ruff check .
       - name: Format

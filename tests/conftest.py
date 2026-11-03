@@ -106,6 +106,11 @@ class SampleLab:
 
 @pytest.fixture
 def sample_lab(tmp_path: Path) -> SampleLab:
+    return build_sample_lab(tmp_path)
+
+
+def build_sample_lab(tmp_path: Path) -> SampleLab:
+    """Create the sample lab under `tmp_path` (also usable outside pytest)."""
     root = tmp_path / "Lab Drive"
     (root / "Protocols").mkdir(parents=True)
     (root / "Inventory").mkdir()

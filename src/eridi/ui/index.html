@@ -1,1 +1,27 @@
-<!doctype html><title>Eridi</title>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Eridi</title>
+  <link rel="stylesheet" href="/ui/app.css">
+  <script src="/ui/app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="top">
+    <a class="brand" href="#/search">Eridi</a>
+    <nav aria-label="Main">
+      <a href="#/search" data-nav="search">Search</a>
+      <a href="#/changes" data-nav="changes">Changes <span class="badge" id="pending-count" hidden></span></a>
+      <a href="#/storage" data-nav="storage">Storage</a>
+    </nav>
+    <div class="scan">
+      <span id="scan-status" role="status" aria-live="polite"></span>
+      <button type="button" id="scan-now">Scan now</button>
+    </div>
+  </header>
+  <main id="main" tabindex="-1"></main>
+</body>
+</html>

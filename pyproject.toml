@@ -79,4 +79,7 @@ mypy_path = "src"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
-markers = ["perf: performance tests (skip with -m 'not perf')"]
+markers = [
+    "perf: performance tests (skip with -m 'not perf')",
+    "browser: drives the web UI in Chromium (Linux CI only)",
+]
