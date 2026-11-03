@@ -138,3 +138,23 @@ class Root:
     search: bool = True
     save: bool = False
     is_home_default: bool = False
+
+
+@dataclass(frozen=True)
+class FileInfo:
+    """A file as the index knows it. `path` is POSIX-style, relative to its root."""
+
+    root_id: str
+    path: str
+    size: int
+    modified: float
+    ext: str
+    content_sha256: str | None = None
+    text_sha256: str | None = None
+    status: str = "present"
+    """"present" or "missing" (gone from storage; its history is kept)."""
+    placeholder: bool = False
+    title: str | None = None
+    extract_status: str | None = None
+    last_seen: str | None = None
+    id: int | None = None
