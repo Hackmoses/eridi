@@ -260,8 +260,18 @@ def init(
             "share it with your other computers or your lab."
         ),
     ] = None,
+    join: Annotated[
+        Path | None,
+        typer.Option(
+            help="Join a record folder a labmate already set up (e.g. in a shared SharePoint "
+            "or Google Drive folder)."
+        ),
+    ] = None,
 ) -> None:
     """Set up Eridi: your name, and where to keep the record."""
+    if join is not None and record_folder is not None:
+        err_console().print("[red]Error:[/red] Use --join or --record-folder, not both.")
+        raise typer.Exit(2)
     with session() as eridi:
         current = eridi.config
         if name is None:
@@ -270,14 +280,24 @@ def init(
             email = typer.prompt(
                 "Email (optional)", default=current.user.email or "", show_default=False
             )
-        if record_folder is None:
-            default = str(current.effective_record_folder)
-            answer = typer.prompt("Record folder", default=default)
-            record_folder = Path(answer) if answer != default or current.record_folder else None
-        config = eridi.init(name, email or None, record_folder)
+        if join is not None:
+            config = eridi.init(name, email or None, join, join=True)
+        else:
+            if record_folder is None:
+                default = str(current.effective_record_folder)
+                answer = typer.prompt("Record folder", default=default)
+                changed = answer != default or current.record_folder
+                record_folder = Path(answer) if changed else None
+            config = eridi.init(name, email or None, record_folder)
         out = console()
         out.print(f"Ready. Writing as [bold]{escape(config.user.name)}[/bold].")
         out.print(f"Record: {escape(str(config.effective_record_folder))}")
+        others = [m for m in eridi.record_members() if m[0] != config.user.name]
+        if others:
+            total = sum(m[1] for m in others)
+            names = ", ".join(escape(m[0]) for m in others[:5])
+            more = f" and {len(others) - 5} more" if len(others) > 5 else ""
+            out.print(f"{total} entries from {names}{more}.")
         if not eridi.list_roots():
             out.print("Next: eridi storage add <folder>")
 

@@ -62,7 +62,7 @@ from eridi.core.models import (
 )
 from eridi.core.paths import PathOutsideRootError, app_home, normalize_relative, to_posix_relative
 from eridi.core.record.schema import make_entry, parse_entry
-from eridi.core.record.store import RecordFolderError, RecordStore
+from eridi.core.record.store import MARKER_NAME, RecordFolderError, RecordStore
 from eridi.core.record.views import HistoryItem, history
 from eridi.core.scan import Progress, ScanReport, scan_files, scan_root
 from eridi.core.snapshots import SnapshotStore
@@ -237,17 +237,34 @@ class Eridi:
         return self.config_file.exists() and bool(self.config.user.name.strip())
 
     def init(
-        self, name: str, email: str | None = None, record_folder: Path | None = None
+        self,
+        name: str,
+        email: str | None = None,
+        record_folder: Path | None = None,
+        *,
+        join: bool = False,
     ) -> Config:
-        """Set who is writing, and where the record lives (default `<app-data>/record`)."""
+        """Set who is writing, and where the record lives (default `<app-data>/record`).
+
+        `join=True` joins a record folder a labmate already created (for example in a shared
+        SharePoint or Google Drive folder): it must exist and is never created.
+        """
         if not name.strip():
             raise EridiError("A name is needed, so entries show who wrote them.")
+        if join and record_folder is None:
+            raise EridiError("Give the shared record folder to join.")
         with self._lock:
             folder = record_folder.expanduser().resolve() if record_folder else None
             config = replace(
                 self._config, user=User(name.strip(), (email or "").strip() or None),
                 record_folder=folder,
             )  # fmt: skip
+            if join:
+                assert folder is not None  # noqa: S101 - checked above
+                self._store = self._open_shared(folder)
+                self._save(config)
+                self._resync_record()
+                return config
             try:
                 self._store = RecordStore.init(config.effective_record_folder)
             except OSError as exc:
@@ -256,8 +273,54 @@ class Eridi:
                     f"{exc.strerror or exc}. Choose a folder you can write to."
                 ) from None
             self._save(config)
-            self._last_refresh = 0.0
+            self._resync_record()
             return config
+
+    @staticmethod
+    def _open_shared(folder: Path) -> RecordStore:
+        if not folder.is_dir():
+            raise EridiError(
+                f"{folder} can't be found. If it's a shared folder, check that it has synced "
+                "to this computer (in OneDrive, Google Drive or SharePoint, make it available "
+                "offline), then try again."
+            )
+        try:
+            return RecordStore(folder)
+        except RecordFolderError:
+            inside = sorted(p.parent for p in folder.glob(f"*/{MARKER_NAME}"))
+            hint = (
+                f" The record seems to be in {inside[0]}; join that folder instead."
+                if inside
+                else " Ask the labmate who set it up for the folder that contains "
+                f"{MARKER_NAME}, or run `eridi init` without --join to start a new record."
+            )
+            raise EridiError(f"{folder} is not an Eridi record folder.{hint}") from None
+
+    def record_members(self) -> list[tuple[str, int, str]]:
+        """Who has written to the record: (name, entries, latest entry time), most recent
+        first. AI-written entries count for the person they were written for."""
+        with self._lock:
+            self._refresh_records()
+            rows = self.conn.execute(
+                "SELECT json FROM entries WHERE kind != 'tombstone' ORDER BY id"
+            ).fetchall()
+        people: dict[str, tuple[int, str]] = {}
+        for (raw,) in rows:
+            entry = parse_entry(json.loads(raw))
+            name = entry.author.name
+            if entry.author.kind == "agent" and name.endswith(")") and " (for " in name:
+                name = name.rsplit(" (for ", 1)[1][:-1]
+            count, _ = people.get(name, (0, ""))
+            people[name] = (count + 1, entry.created_at)
+        return sorted(
+            ((n, c, last) for n, (c, last) in people.items()), key=lambda t: t[2], reverse=True
+        )
+
+    def _resync_record(self) -> None:
+        """The record folder changed: load it fully (dropping another folder's entries)."""
+        assert self._store is not None  # noqa: S101 - set just before
+        sync_records(self.conn, self._store, full=True)
+        self._last_refresh = time.monotonic()
 
     def _require_init(self) -> None:
         if not self.initialized:
