@@ -10,7 +10,7 @@ Agents: tick tasks as you finish them, add a one-line note if anything differs f
 - [x] **M3 Index and search**: [x] 1 db · [x] 2 files · [x] 3 records · [x] 4 search · [x] 5 rebuild
 - [x] **M4 Scanning, snapshots, changes**: [x] 1 snapshots · [x] 2 scanner · [x] 3 changes/diffs · [x] 4 service
 - [ ] **M5 CLI**: [x] 1 commands · [x] 2 interactive why · [x] 3 file arguments · [ ] Human check: one week of real use
-- [ ] **M6 MCP server**: [x] 1 tools · [x] 2 write gate · [x] 3 command · [ ] 4 docs · [ ] Human check
+- [ ] **M6 MCP server**: [x] 1 tools · [x] 2 write gate · [x] 3 command · [x] 4 docs · [ ] Human check
 - [ ] **M7 Web interface**: [ ] 1 server/security · [ ] 2 routes · [ ] 3 UI · [ ] 4 background scan
 - [ ] **GATE A**: two weeks, two people
 

@@ -36,6 +36,7 @@ See:
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): design and structure
 - [`docs/RECORD_FORMAT.md`](docs/RECORD_FORMAT.md): the open record format
 - [`docs/PROGRESS.md`](docs/PROGRESS.md): what's done
+- [`docs/MCP.md`](docs/MCP.md): using Eridi from Claude and other AI assistants
 
 ## Building with an AI agent
 
