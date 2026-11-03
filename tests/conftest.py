@@ -9,10 +9,22 @@ import json
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from docx import Document
 from openpyxl import Workbook
+
+from eridi.core.models import Author, Entry
+from eridi.core.record.schema import make_entry
+
+TEST_AUTHOR = Author("A. Okafor", "human", "a.okafor@example.edu")
+TEST_DEVICE = "dev_01JC8Y0000000000000000000A"
+
+
+def entry(kind: str = "note", text: str = "Why it changed.", **fields: Any) -> Entry:
+    """A valid new entry for tests."""
+    return make_entry(kind, TEST_AUTHOR, TEST_DEVICE, text, **fields)
 
 
 @pytest.fixture(autouse=True)
