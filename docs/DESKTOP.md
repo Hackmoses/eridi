@@ -40,3 +40,29 @@ Local builds are unsigned and never check for updates (no updater key is built i
 One version everywhere: `pyproject.toml`, `desktop/package.json`,
 `desktop/src-tauri/Cargo.toml` and `desktop/src-tauri/tauri.conf.json`. A test checks they
 agree.
+
+## Updates
+
+The app checks GitHub Releases for `latest.json` at start and from the tray (Check for
+updates…). If there's a newer version it asks, then downloads, verifies the update's
+signature against the public key built into the app, installs and restarts (stopping the
+engine first, so the installer can replace it). Builds without a key never check.
+
+Set it up once (needs someone who will keep the key safe):
+
+```bash
+cd desktop
+npx tauri signer generate -w ~/.tauri/eridi-updater.key   # asks for a password
+```
+
+- Secret `TAURI_SIGNING_PRIVATE_KEY`: the contents of `~/.tauri/eridi-updater.key`.
+- Secret `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: its password.
+- Variable `TAURI_UPDATER_PUBKEY`: the contents of `~/.tauri/eridi-updater.key.pub`.
+
+Keep the private key and password backed up somewhere safe. **The public key can never
+change**: installed copies only accept updates signed with its private key. If it is lost,
+everyone has to download the next version by hand.
+
+The Release workflow then builds signed update bundles (`.app.tar.gz` on macOS, the NSIS
+installer on Windows, the AppImage on Linux), collects them with
+`scripts/collect_bundles.py`, and writes `latest.json` with `scripts/update_manifest.py`.
