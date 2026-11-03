@@ -14,11 +14,9 @@ Version history comes from `/items/{id}/versions`.
 """
 
 import logging
-import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import quote
 
@@ -32,18 +30,16 @@ from eridi.connectors.base import (
     RemoteFile,
     RemoteVersion,
 )
+from eridi.connectors.http import MAX_WAIT, TIMEOUT, ApiClient, ApiError, TokenProvider
 from eridi.connectors.local import DEFAULT_IGNORES
+
+__all__ = ["MAX_WAIT", "TIMEOUT", "TokenProvider"]
 
 log = logging.getLogger(__name__)
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 ROOT_ID_PREFIX = "ms:"
 """Storage IDs for Microsoft drives are `ms:<driveId>` (see RECORD_FORMAT.md, "Roots")."""
-TIMEOUT = httpx.Timeout(30.0, read=120.0)
-RETRY_STATUSES = (429, 500, 502, 503, 504)
-MAX_ATTEMPTS = 6
-MAX_WAIT = 300.0
-"""Never wait longer than this for one retry, whatever `Retry-After` says."""
 SIMPLE_UPLOAD_MAX = 4 * 1024 * 1024
 """Graph takes files up to 4 MB in one request; larger ones go through an upload session."""
 UPLOAD_CHUNK = 10 * 320 * 1024
@@ -57,11 +53,8 @@ def root_id_for(drive_id: str) -> str:
     return ROOT_ID_PREFIX + drive_id
 
 
-class GraphError(ConnectorError):
-    def __init__(self, message: str, status: int | None = None, code: str | None = None) -> None:
-        super().__init__(message)
-        self.status = status
-        self.code = code
+class GraphError(ApiError):
+    pass
 
 
 class ResyncRequiredError(GraphError):
@@ -70,85 +63,27 @@ class ResyncRequiredError(GraphError):
 
 # --- HTTP ---
 
-TokenProvider = Callable[[], str]
 
-
-class GraphClient:
+class GraphClient(ApiClient):
     """Plain HTTPS to Microsoft Graph with a bearer token."""
 
-    def __init__(
-        self,
-        token: TokenProvider,
-        *,
-        http: httpx.Client | None = None,
-        sleep: Callable[[float], None] = time.sleep,
-        max_attempts: int = MAX_ATTEMPTS,
-    ) -> None:
-        self._token = token
-        self.http = http or httpx.Client(timeout=TIMEOUT, follow_redirects=True)
-        self.sleep = sleep
-        self.max_attempts = max_attempts
+    base = GRAPH
+    provider = "Microsoft"
 
-    def __getstate__(self) -> dict[str, Any]:
-        raise TypeError("A Graph client can't be sent to another process.")
+    def error_for(self, response: httpx.Response) -> GraphError:
+        return _error_for(response)
 
-    def _url(self, path_or_url: str) -> str:
-        return path_or_url if path_or_url.startswith("https://") else GRAPH + path_or_url
-
-    def request(self, path_or_url: str, params: dict[str, str] | None = None) -> httpx.Response:
-        """GET with the token. Throttling (429), busy servers (5xx) and dropped connections
-        are retried, waiting as long as Microsoft's `Retry-After` asks (else 1, 2, 4… s)."""
-        return self.send("GET", path_or_url, params=params)
-
-    def send(
-        self,
-        method: str,
-        path_or_url: str,
-        *,
-        params: dict[str, str] | None = None,
-        content: bytes | None = None,
-        json: Any = None,
-        headers: dict[str, str] | None = None,
-        auth: bool = True,
-    ) -> httpx.Response:
-        """Any request, retried like `request`. `auth=False` sends no token (upload-session
-        URLs are pre-authorized, and must not receive it)."""
-        url = self._url(path_or_url)
-        for attempt in range(1, self.max_attempts + 1):
-            last = attempt == self.max_attempts
-            sent = dict(headers or {})
-            if auth:
-                sent["Authorization"] = f"Bearer {self._token()}"
-            try:
-                response = self.http.request(
-                    method, url, params=params, content=content, json=json, headers=sent
-                )
-            except httpx.TransportError as exc:
-                if last:
-                    raise GraphError(
-                        f"Couldn't reach Microsoft ({type(exc).__name__}). Check the internet "
-                        "connection; Eridi will try again at the next scan."
-                    ) from None
-                self.sleep(_backoff(attempt))
-                continue
-            if response.status_code in RETRY_STATUSES and not last:
-                wait = _retry_after(response) or _backoff(attempt)
-                log.info("Microsoft asked to wait %.0f s (HTTP %s).", wait, response.status_code)
-                self.sleep(min(wait, MAX_WAIT))
-                continue
-            if response.status_code >= 400:
-                raise _error_for(response)
-            return response
-        raise AssertionError("unreachable")  # pragma: no cover
+    def unreachable(self, exc: Exception) -> GraphError:
+        return GraphError(
+            f"Couldn't reach Microsoft ({type(exc).__name__}). Check the internet "
+            "connection; Eridi will try again at the next scan."
+        )
 
     def get(self, path_or_url: str, params: dict[str, str] | None = None) -> dict[str, Any]:
         data = self.request(path_or_url, params).json()
         if not isinstance(data, dict):
             raise GraphError("Microsoft returned something unexpected. Try again later.")
         return data
-
-    def get_bytes(self, path_or_url: str) -> bytes:
-        return self.request(path_or_url).content
 
     def pages(
         self, path_or_url: str, params: dict[str, str] | None = None
@@ -167,24 +102,6 @@ class GraphClient:
     ) -> Iterator[dict[str, Any]]:
         for page in self.pages(path_or_url, params):
             yield from page.get("value", [])
-
-
-def _backoff(attempt: int) -> float:
-    return float(min(2 ** (attempt - 1), 60))
-
-
-def _retry_after(response: httpx.Response) -> float | None:
-    """Seconds from a `Retry-After` header (a number, or an HTTP date)."""
-    value = response.headers.get("Retry-After", "").strip()
-    if not value:
-        return None
-    if value.isdigit():
-        return float(value)
-    try:
-        moment = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        return None
-    return max(0.0, moment.timestamp() - time.time())
 
 
 def _error_for(response: httpx.Response) -> GraphError:

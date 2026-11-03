@@ -46,6 +46,12 @@ class Settings:
     microsoft_client_id: str = ""
     """The Microsoft Entra app ID used to sign in to OneDrive and SharePoint; empty uses
     Eridi's own. The `ERIDI_MS_CLIENT_ID` environment variable overrides both."""
+    google_client_id: str = ""
+    """The Google desktop-app OAuth client for Google Drive; empty uses Eridi's own.
+    `ERIDI_GOOGLE_CLIENT_ID` overrides both."""
+    google_client_secret: str = ""
+    """That client's secret. Google treats a desktop app's secret as not confidential (it
+    ships with the app); your sign-in tokens are kept in the OS keychain, never here."""
 
     @property
     def size_limit_bytes(self) -> int:

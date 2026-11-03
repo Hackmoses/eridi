@@ -19,6 +19,7 @@ classifiers = [
 ]
 dependencies = [
     "fastapi>=0.115",
+    "google-auth-oauthlib>=1.2",
     "httpx>=0.28",
     "keyring>=25",
     "mcp>=2.3",           # official MCP SDK, so AI assistants can use the record
@@ -85,6 +86,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["msal", "msal.*"]  # ships no type information
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["google_auth_oauthlib", "google_auth_oauthlib.*"]  # ships no type information
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

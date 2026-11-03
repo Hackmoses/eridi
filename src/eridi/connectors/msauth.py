@@ -113,15 +113,16 @@ class TokenStore(Protocol):
 class KeyringTokenStore:
     """MSAL's serialized cache, split across keychain entries `cache:0`, `cache:1`, …"""
 
-    def __init__(self, client: str) -> None:
-        self.prefix = f"cache:{client}"
+    def __init__(self, client: str, *, service: str = KEYRING_SERVICE, name: str = "cache") -> None:
+        self.prefix = f"{name}:{client}"
+        self.service = service
 
     def load(self) -> str | None:
-        count = keyring.get_password(KEYRING_SERVICE, f"{self.prefix}:count")
+        count = keyring.get_password(self.service, f"{self.prefix}:count")
         if not count or not count.isdigit():
             return None
         parts = [
-            keyring.get_password(KEYRING_SERVICE, f"{self.prefix}:{i}") for i in range(int(count))
+            keyring.get_password(self.service, f"{self.prefix}:{i}") for i in range(int(count))
         ]
         if any(p is None for p in parts):
             return None  # half-written: start over rather than guess
@@ -129,13 +130,13 @@ class KeyringTokenStore:
 
     def save(self, text: str) -> None:
         chunks = [text[i : i + CHUNK] for i in range(0, len(text), CHUNK)] or [""]
-        old = keyring.get_password(KEYRING_SERVICE, f"{self.prefix}:count")
+        old = keyring.get_password(self.service, f"{self.prefix}:count")
         for i, chunk in enumerate(chunks):
-            keyring.set_password(KEYRING_SERVICE, f"{self.prefix}:{i}", chunk)
-        keyring.set_password(KEYRING_SERVICE, f"{self.prefix}:count", str(len(chunks)))
+            keyring.set_password(self.service, f"{self.prefix}:{i}", chunk)
+        keyring.set_password(self.service, f"{self.prefix}:count", str(len(chunks)))
         if old and old.isdigit():  # blank leftovers from a longer cache
             for i in range(len(chunks), int(old)):
-                keyring.set_password(KEYRING_SERVICE, f"{self.prefix}:{i}", "")
+                keyring.set_password(self.service, f"{self.prefix}:{i}", "")
 
 
 # --- signing in ---
